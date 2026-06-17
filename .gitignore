@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+
+# Node
+node_modules/
+web/dist/
+.vite/
+
+# Local runtime data
+backend/remotectrl.db
+backend/*.db
+agent/*.json
+agent/*.log
+agent/downloads/
+agent/artifacts/
+tools/
+Resource/
+.env
+*.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

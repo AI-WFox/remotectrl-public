@@ -1,0 +1,94 @@
+from fastapi.testclient import TestClient
+
+from app.core.db import init_db
+from app.main import app, settings
+from app.services.repository import Repository
+
+
+def test_agent_websocket_receives_command_and_returns_result(tmp_path):
+    settings.database_path = tmp_path / "ws.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("ws", reusable=True)
+
+    client = TestClient(app)
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    enrolled = client.post(
+        "/api/agents/enroll",
+        json={
+            "enrollment_token": enrollment_token,
+            "name": "WS Agent",
+            "hostname": "ws-host",
+            "os": "Windows",
+        },
+    ).json()
+
+    with client.websocket_connect(f"/ws/agent?token={enrolled['agent_token']}") as websocket:
+        hello = websocket.receive_json()
+        assert hello["agent_id"] == enrolled["agent_id"]
+
+        command_response = client.post(
+            "/api/commands",
+            headers=headers,
+            json={"agent_id": enrolled["agent_id"], "type": "process.list", "payload": {}},
+        )
+        assert command_response.status_code == 200
+        command_id = command_response.json()["id"]
+        routed = websocket.receive_json()
+        assert routed["type"] == "command"
+        assert routed["command_id"] == command_id
+        assert routed["command_type"] == "process.list"
+
+        websocket.send_json(
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "agent_id": enrolled["agent_id"],
+                "ok": True,
+                "payload": {"count": 0, "items": []},
+            }
+        )
+
+    command = repo.get_command(command_id)
+    assert command["status"] == "succeeded"
+    assert command["result"] == {"count": 0, "items": []}
+
+
+def test_delete_online_agent_closes_and_removes_record(tmp_path):
+    settings.database_path = tmp_path / "delete-online.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("ws-delete", reusable=True)
+
+    client = TestClient(app)
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    enrolled = client.post(
+        "/api/agents/enroll",
+        json={
+            "enrollment_token": enrollment_token,
+            "name": "Online Delete Agent",
+            "hostname": "online-delete-host",
+            "os": "Windows",
+        },
+    ).json()
+
+    with client.websocket_connect(f"/ws/agent?token={enrolled['agent_token']}") as websocket:
+        hello = websocket.receive_json()
+        assert hello["agent_id"] == enrolled["agent_id"]
+        listed = client.get("/api/agents", headers=headers)
+        assert listed.json()[0]["status"] == "online"
+
+        deleted = client.delete(f"/api/agents/{enrolled['agent_id']}", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        assert repo.get_agent(enrolled["agent_id"]) is None

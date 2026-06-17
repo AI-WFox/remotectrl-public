@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: remotectrl-public-demo
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: REMOTECTRL_SECRET_KEY
+        generateValue: true
+      - key: REMOTECTRL_ADMIN_EMAIL
+        value: admin@remotectrl.local
+      - key: REMOTECTRL_ADMIN_PASSWORD
+        sync: false
+      - key: REMOTECTRL_CORS_ORIGINS
+        value: https://remotectrl-public-demo.onrender.com
