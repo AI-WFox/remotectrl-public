@@ -67,10 +67,10 @@ export function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [token, setToken] = useState<string>(() => localStorage.getItem("rt_token") ?? "");
   const [demoMode, setDemoMode] = useState<boolean>(() => localStorage.getItem("rt_demo") === "true");
-  const [agents, setAgents] = useState<Agent[]>(mockAgents);
-  const [commands, setCommands] = useState<Command[]>(mockCommands);
-  const [audit, setAudit] = useState<AuditEvent[]>(mockAudit);
-  const [selectedAgentId, setSelectedAgentId] = useState(mockAgents[0].id);
+  const [agents, setAgents] = useState<Agent[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockAgents : []));
+  const [commands, setCommands] = useState<Command[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockCommands : []));
+  const [audit, setAudit] = useState<AuditEvent[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockAudit : []));
+  const [selectedAgentId, setSelectedAgentId] = useState(() => (localStorage.getItem("rt_demo") === "true" ? mockAgents[0].id : ""));
   const [selectedModule, setSelectedModule] = useState(modules[0].id);
   const [loginError, setLoginError] = useState("");
   const [notice, setNotice] = useState("Demo data is loaded until the gateway responds.");
@@ -144,18 +144,20 @@ export function App() {
     }
     try {
       const data = await loadDashboard(activeToken);
-      const nextAgents = data.agents.length ? data.agents : mockAgents;
+      const nextAgents = data.agents;
       const selected = nextAgents.find((agent) => agent.id === selectedAgentId);
       const onlineAgent = nextAgents.find((agent) => agent.status === "online");
       setAgents(nextAgents);
-      setCommands(data.commands.length ? data.commands : mockCommands);
-      setAudit(data.audit.length ? data.audit : mockAudit);
+      setCommands(data.commands);
+      setAudit(data.audit);
       if (onlineAgent && (!selected || selected.status !== "online")) {
         setSelectedAgentId(onlineAgent.id);
       } else if (nextAgents[0] && !selected) {
         setSelectedAgentId(nextAgents[0].id);
+      } else if (!nextAgents.length) {
+        setSelectedAgentId("");
       }
-      setNotice("Gateway connected. Live agent data is active.");
+      setNotice(nextAgents.length ? "Gateway connected. Live agent data is active." : "Gateway connected. Create an enrollment token, then connect a Windows agent.");
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         setNotice("Session expired or invalid. Sign out, then sign in again to create real enrollment tokens.");
@@ -384,6 +386,12 @@ export function App() {
               </button>
             </div>
           ))}
+          {!agents.length && (
+            <div className="empty-sidebar-state">
+              <strong>No agents yet</strong>
+              <span>Create an enrollment token and connect the Windows agent.</span>
+            </div>
+          )}
         </div>
 
         <div className="nav-section">

@@ -152,6 +152,20 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .agent-row small { display: block; color: var(--muted); margin-top: 2px; }
 .agent-row svg { margin-left: auto; color: var(--muted); }
 
+.empty-sidebar-state {
+  display: grid;
+  gap: 5px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  padding: 12px;
+  font-size: 12px;
+}
+.empty-sidebar-state strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;
