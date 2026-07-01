@@ -45,7 +45,7 @@ Recommended demo order:
 6. `Key Capture`
 7. `Power`
 
-Sensitive commands show a local approval prompt on the agent. Power commands default to dry-run mode.
+Remote commands show a local approval prompt on the agent by default. The Agent user may allow the same action family for the current session only. Stop Live/Stop Session commands do not prompt because they reduce access. Power commands default to dry-run mode.
 
 ## Verify Before Demo
 

@@ -234,12 +234,12 @@ class CommandHandlers:
         return self._power(["shutdown", "/l"], "logout")
 
     def keycapture_start(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        self.keycapture_provider("start")
-        return {"status": "started", "mode": "visible_demo_window"}
+        status = self.keycapture_provider("start") or "started"
+        return {"status": status, "mode": "visible_demo_window"}
 
     def keycapture_stop(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        self.keycapture_provider("stop")
-        return {"status": "stopped"}
+        status = self.keycapture_provider("stop") or "stopped"
+        return {"status": status}
 
     def keycapture_export(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return {"text": self.keycapture_provider("export"), "mode": "visible_demo_window"}

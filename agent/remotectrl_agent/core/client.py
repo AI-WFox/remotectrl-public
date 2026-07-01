@@ -6,7 +6,7 @@ import queue
 import socket
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 import requests
 import websocket
@@ -17,7 +17,7 @@ from remotectrl_agent.core.protocol import http_to_ws, result
 
 
 StatusCallback = Callable[[str], None]
-ApprovalCallback = Callable[[dict], bool]
+ApprovalCallback = Callable[[dict], dict[str, Any] | bool]
 
 
 class AgentClient:
@@ -36,6 +36,8 @@ class AgentClient:
         self.stop_event = threading.Event()
         self.send_lock = threading.Lock()
         self.active_streams: dict[str, tuple[threading.Event, threading.Thread]] = {}
+        self.session_approvals: set[str] = set()
+        self.keycapture_active = False
         self.thread: threading.Thread | None = None
 
     def enroll(self, enrollment_token: str) -> None:
@@ -102,6 +104,8 @@ class AgentClient:
                 self._handle_message(ws, json.loads(raw))
         finally:
             self._stop_all_streams()
+            self.session_approvals.clear()
+            self.keycapture_active = False
             ws.close()
 
     def _handle_message(self, ws, message: dict) -> None:
@@ -110,28 +114,93 @@ class AgentClient:
         command_id = message["command_id"]
         agent_id = message["agent_id"]
         command_type = message["command_type"]
+        payload = message.get("payload") or {}
+        if command_type in {"screen.live.start", "webcam.live.start"} and self._stream_active(command_type):
+            self._send(ws, result(command_id, agent_id, True, payload={"status": "already_running", "stream": self._stream_name(command_type)}))
+            return
+        if command_type == "keycapture.start" and self.keycapture_active:
+            payload_result = self.handlers.handle(command_type, payload)
+            payload_result["status"] = "already_running"
+            self._send(ws, result(command_id, agent_id, True, payload=payload_result))
+            return
         requires_approval = bool(message.get("requires_approval"))
         if requires_approval:
-            approved = self.request_approval(message)
-            self._send(ws, {"type": "approval_response", "command_id": command_id, "agent_id": agent_id, "approved": approved})
-            if not approved:
+            decision = self._approval_decision(message)
+            self._send(
+                ws,
+                {
+                    "type": "approval_response",
+                    "command_id": command_id,
+                    "agent_id": agent_id,
+                    "approved": decision["approved"],
+                    "approval_mode": decision["approval_mode"],
+                    "policy_scope": decision["policy_scope"],
+                },
+            )
+            if not decision["approved"]:
                 return
         try:
             if command_type in {"screen.live.start", "webcam.live.start"}:
-                self._start_stream(ws, command_id, agent_id, command_type, message.get("payload") or {})
+                self._start_stream(ws, command_id, agent_id, command_type, payload)
                 return
             if command_type in {"screen.live.stop", "webcam.live.stop"}:
-                payload = self._stop_stream(command_type)
-                self._send(ws, result(command_id, agent_id, True, payload=payload))
+                payload_result = self._stop_stream(command_type)
+                self._send(ws, result(command_id, agent_id, True, payload=payload_result))
                 return
-            payload = self.handlers.handle(command_type, message.get("payload") or {})
-            self._send(ws, result(command_id, agent_id, True, payload=payload))
+            payload_result = self.handlers.handle(command_type, payload)
+            if command_type == "keycapture.start" and payload_result.get("status") in {"started", "already_running"}:
+                self.keycapture_active = True
+            elif command_type == "keycapture.stop":
+                self.keycapture_active = False
+            self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
 
+
+    def reset_session_approvals(self) -> None:
+        self.session_approvals.clear()
+
+    def _approval_decision(self, message: dict) -> dict[str, Any]:
+        family = self._approval_family(message.get("command_type", ""))
+        if family in self.session_approvals:
+            return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
+        raw = self.request_approval(message)
+        if isinstance(raw, bool):
+            return {"approved": raw, "approval_mode": "prompt_once", "policy_scope": "single_command"}
+        approved = bool(raw.get("approved"))
+        policy_scope = str(raw.get("policy_scope") or "single_command")
+        if approved and policy_scope == "current_session":
+            self.session_approvals.add(family)
+        return {
+            "approved": approved,
+            "approval_mode": str(raw.get("approval_mode") or "prompt_once"),
+            "policy_scope": policy_scope,
+        }
+
+    def _approval_family(self, command_type: str) -> str:
+        if command_type.startswith("screen."):
+            return "screen"
+        if command_type.startswith("webcam."):
+            return "webcam"
+        if command_type.startswith("keycapture."):
+            return "keycapture"
+        if command_type.startswith("files."):
+            return "files"
+        if command_type.startswith("process."):
+            return "processes"
+        if command_type.startswith("app."):
+            return "applications"
+        if command_type.startswith("power."):
+            return "power"
+        return command_type
+
+    def _stream_name(self, command_type: str) -> str:
+        return "screen" if command_type.startswith("screen.") else "webcam"
+
+    def _stream_active(self, command_type: str) -> bool:
+        return self._stream_name(command_type) in self.active_streams
     def _start_stream(self, ws, command_id: str, agent_id: str, command_type: str, payload: dict) -> None:
-        stream = "screen" if command_type.startswith("screen.") else "webcam"
-        self._stop_stream(command_type)
+        stream = self._stream_name(command_type)
         stop_stream = threading.Event()
         thread = threading.Thread(
             target=self._stream_frames,
@@ -142,7 +211,7 @@ class AgentClient:
         thread.start()
 
     def _stop_stream(self, command_type: str) -> dict:
-        stream = "screen" if command_type.startswith("screen.") else "webcam"
+        stream = self._stream_name(command_type)
         active = self.active_streams.get(stream)
         if not active:
             return {"stream": stream, "status": "not_running"}

@@ -11,15 +11,28 @@ from app.core.db import session
 from app.core.security import generate_secret, hash_password
 
 
-SENSITIVE_COMMAND_PREFIXES = (
-    "screen.",
-    "webcam.",
-    "files.download",
-    "power.",
-    "keycapture.",
-    "process.kill",
+APPROVAL_REQUIRED_COMMANDS = {
+    "app.list",
+    "app.start",
     "app.stop",
-)
+    "process.list",
+    "process.kill",
+    "files.list",
+    "files.download",
+    "screen.live.start",
+    "screen.screenshot",
+    "webcam.live.start",
+    "webcam.snapshot",
+    "keycapture.start",
+    "keycapture.export",
+    "power.shutdown",
+    "power.restart",
+    "power.logout",
+}
+
+
+def command_requires_approval(command_type: str) -> bool:
+    return command_type in APPROVAL_REQUIRED_COMMANDS
 
 
 def now_iso() -> str:
@@ -157,7 +170,7 @@ class Repository:
         if not self.get_agent(agent_id):
             raise KeyError(f"Unknown agent: {agent_id}")
         created = now_iso()
-        requires_approval = command_type.startswith(SENSITIVE_COMMAND_PREFIXES)
+        requires_approval = command_requires_approval(command_type)
         record = {
             "id": str(uuid.uuid4()),
             "agent_id": agent_id,

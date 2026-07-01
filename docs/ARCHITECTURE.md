@@ -19,15 +19,9 @@ The gateway is the only component that routes commands. Agents never accept inbo
 
 ## Consent Boundary
 
-Sensitive handlers in the agent must call the local approval UI before doing work:
+Remote handlers require local approval before doing work by default, including application/process listing, app start/stop, file browse/download, screen, webcam, key capture, and power control. Stop commands that reduce access do not require approval.
 
-- screen screenshot/live
-- webcam snapshot/live
-- file download
-- key-capture session
-- power control
-
-Approval decisions are reported to the backend and written to audit logs.
+Agent users can approve a command once or allow the same command family for the current Agent session. Session approvals are runtime-only and reset on disconnect/restart/manual reset. Approval decisions, including cached session approvals, are reported to the backend and written to audit logs.
 
 ## Data Model
 

@@ -23,9 +23,14 @@ def test_api_login_enroll_and_offline_command(tmp_path):
 
     bootstrap = client.get("/api/bootstrap")
     assert bootstrap.status_code == 200
-    assert any(item["type"] == "screen.live.start" for item in bootstrap.json()["capabilities"])
-    assert any(item["type"] == "screen.live.stop" for item in bootstrap.json()["capabilities"])
-    assert any(item["type"] == "webcam.live.stop" for item in bootstrap.json()["capabilities"])
+    capabilities = {item["type"]: item for item in bootstrap.json()["capabilities"]}
+    assert capabilities["process.list"]["requires_approval"] is True
+    assert capabilities["app.list"]["requires_approval"] is True
+    assert capabilities["files.list"]["requires_approval"] is True
+    assert capabilities["screen.live.start"]["requires_approval"] is True
+    assert capabilities["screen.live.stop"]["requires_approval"] is False
+    assert capabilities["webcam.live.stop"]["requires_approval"] is False
+    assert capabilities["keycapture.stop"]["requires_approval"] is False
 
     enrolled = client.post(
         "/api/agents/enroll",
@@ -45,6 +50,7 @@ def test_api_login_enroll_and_offline_command(tmp_path):
         json={"agent_id": agent_id, "type": "process.list", "payload": {}},
     )
     assert command.status_code == 200
+    assert command.json()["requires_approval"] is True
     assert command.json()["status"] == "failed"
     assert command.json()["error"] == "Agent offline"
 

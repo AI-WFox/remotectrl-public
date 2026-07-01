@@ -24,7 +24,7 @@ from app.schemas import (
     LoginRequest,
     LoginResponse,
 )
-from app.services.repository import Repository
+from app.services.repository import Repository, command_requires_approval
 from app.services.session_manager import SessionManager
 
 
@@ -34,27 +34,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_DIST = PROJECT_ROOT / "web" / "dist"
 
 COMMAND_CATALOG = [
-    {"type": "app.list", "label": "List applications", "requires_approval": False},
-    {"type": "app.start", "label": "Start application", "requires_approval": False},
-    {"type": "app.stop", "label": "Stop application", "requires_approval": True},
-    {"type": "process.list", "label": "List processes", "requires_approval": False},
-    {"type": "process.kill", "label": "Kill process", "requires_approval": True},
-    {"type": "screen.screenshot", "label": "Capture screenshot", "requires_approval": True},
-    {"type": "screen.live.start", "label": "Start screen stream", "requires_approval": True},
-    {"type": "screen.live.stop", "label": "Stop screen stream", "requires_approval": True},
-    {"type": "files.list", "label": "Browse allowed files", "requires_approval": False},
-    {"type": "files.download", "label": "Download file", "requires_approval": True},
-    {"type": "webcam.list", "label": "List cameras", "requires_approval": False},
-    {"type": "webcam.snapshot", "label": "Capture webcam snapshot", "requires_approval": True},
-    {"type": "webcam.live.start", "label": "Start webcam stream", "requires_approval": True},
-    {"type": "webcam.live.stop", "label": "Stop webcam stream", "requires_approval": True},
-    {"type": "power.shutdown", "label": "Shutdown endpoint", "requires_approval": True},
-    {"type": "power.restart", "label": "Restart endpoint", "requires_approval": True},
-    {"type": "power.logout", "label": "Logout endpoint", "requires_approval": True},
-    {"type": "keycapture.start", "label": "Start visible key-capture session", "requires_approval": True},
-    {"type": "keycapture.stop", "label": "Stop visible key-capture session", "requires_approval": True},
-    {"type": "keycapture.export", "label": "Export visible key-capture session", "requires_approval": True},
+    {"type": "app.list", "label": "List applications"},
+    {"type": "app.start", "label": "Start application"},
+    {"type": "app.stop", "label": "Stop application"},
+    {"type": "process.list", "label": "List processes"},
+    {"type": "process.kill", "label": "Kill process"},
+    {"type": "screen.screenshot", "label": "Capture screenshot"},
+    {"type": "screen.live.start", "label": "Start screen stream"},
+    {"type": "screen.live.stop", "label": "Stop screen stream"},
+    {"type": "files.list", "label": "Browse allowed files"},
+    {"type": "files.download", "label": "Download file"},
+    {"type": "webcam.list", "label": "List cameras"},
+    {"type": "webcam.snapshot", "label": "Capture webcam snapshot"},
+    {"type": "webcam.live.start", "label": "Start webcam stream"},
+    {"type": "webcam.live.stop", "label": "Stop webcam stream"},
+    {"type": "power.shutdown", "label": "Shutdown endpoint"},
+    {"type": "power.restart", "label": "Restart endpoint"},
+    {"type": "power.logout", "label": "Logout endpoint"},
+    {"type": "keycapture.start", "label": "Start visible key-capture session"},
+    {"type": "keycapture.stop", "label": "Stop visible key-capture session"},
+    {"type": "keycapture.export", "label": "Export visible key-capture session"},
 ]
+for item in COMMAND_CATALOG:
+    item["requires_approval"] = command_requires_approval(item["type"])
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -297,7 +299,7 @@ async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -
         approved = bool(message.get("approved"))
         status = "running" if approved else "denied"
         command = repo.update_command(command_id, status, error=None if approved else "Denied locally")
-        repo.audit("agent", "approval.response", agent_id, command_id, {"approved": approved})
+        repo.audit("agent", "approval.response", agent_id, command_id, {"approved": approved, "approval_mode": message.get("approval_mode", "prompt_once"), "policy_scope": message.get("policy_scope", "single_command")})
         await manager.broadcast_dashboard({"type": "command.updated", "command": command})
     elif message_type == "command_result":
         if not command_id:

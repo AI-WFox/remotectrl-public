@@ -26,10 +26,10 @@ import { mockAgents, mockAudit, mockCommands } from "./lib/mock";
 import type { Agent, AuditEvent, Command } from "./lib/types";
 
 const modules = [
-  { id: "applications", label: "Applications", icon: AppWindow, command: "app.list", safe: true },
-  { id: "processes", label: "Processes", icon: Activity, command: "process.list", safe: true },
+  { id: "applications", label: "Applications", icon: AppWindow, command: "app.list", safe: false },
+  { id: "processes", label: "Processes", icon: Activity, command: "process.list", safe: false },
   { id: "screen", label: "Screen", icon: Monitor, command: "screen.live.start", safe: false },
-  { id: "files", label: "Files", icon: FileDown, command: "files.list", safe: true },
+  { id: "files", label: "Files", icon: FileDown, command: "files.list", safe: false },
   { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.live.start", safe: false },
   { id: "keycapture", label: "Key Capture", icon: KeyRound, command: "keycapture.start", safe: false },
   { id: "power", label: "Power", icon: Power, command: "power.shutdown", safe: false },
@@ -82,6 +82,12 @@ export function App() {
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0], [agents, selectedAgentId]);
+  const keycaptureActive = useMemo(() => {
+    const latestStateCommand = commands.find(
+      (command) => command.agent_id === selectedAgent?.id && ["keycapture.start", "keycapture.stop"].includes(command.type) && command.status === "succeeded",
+    );
+    return latestStateCommand?.type === "keycapture.start";
+  }, [commands, selectedAgent?.id]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -211,6 +217,14 @@ export function App() {
   async function runCommand(commandType: string, payload: Record<string, unknown> = defaultPayload(commandType)) {
     if (!selectedAgent || !token) return;
     const startedStream = commandType === "screen.live.start" ? "screen" : commandType === "webcam.live.start" ? "webcam" : null;
+    if (startedStream && ["starting", "running"].includes(streamStats[startedStream].status)) {
+      setNotice(`${startedStream} stream is already ${streamStats[startedStream].status}. Stop it before starting again.`);
+      return;
+    }
+    if (commandType === "keycapture.start" && keycaptureActive) {
+      setNotice("Key Capture session is already running. Stop it before starting again.");
+      return;
+    }
     if (startedStream) {
       setStreamFrames((frames) => ({ ...frames, [startedStream]: null }));
       setStreamStats((stats) => ({ ...stats, [startedStream]: { ...emptyStreamStats, status: "starting", fps: Number(payload.fps ?? 10) } }));
@@ -221,8 +235,8 @@ export function App() {
         agent_id: selectedAgent.id,
         type: commandType,
         payload,
-        requires_approval: !modules.find((item) => item.command === commandType)?.safe,
-        status: commandType.includes("live") || commandType.includes("screen") || commandType.includes("webcam") ? "pending_approval" : "succeeded",
+        requires_approval: commandRequiresApproval(commandType),
+        status: commandRequiresApproval(commandType) ? "pending_approval" : "succeeded",
         result: demoResult(commandType),
         created_by: "demo-operator",
         created_at: new Date().toISOString(),
@@ -349,7 +363,7 @@ export function App() {
   }
 
   const onlineCount = agents.filter((agent) => agent.status === "online").length;
-  const pendingApprovals = commands.filter((command) => command.status === "pending_approval" || command.requires_approval).length;
+  const pendingApprovals = commands.filter((command) => command.status === "pending_approval").length;
   const activeModule = modules.find((item) => item.id === selectedModule) ?? modules[0];
   const latestModuleCommand = commands.find((command) => moduleCommandTypes(selectedModule).includes(command.type));
 
@@ -473,6 +487,7 @@ export function App() {
               streamFrames={streamFrames}
               streamStats={streamStats}
               latestCommand={latestModuleCommand}
+              keycaptureActive={keycaptureActive}
             />
         </section>
 
@@ -560,6 +575,7 @@ function ModuleSurface({
   streamFrames,
   streamStats,
   latestCommand,
+  keycaptureActive,
 }: {
   module: (typeof modules)[number];
   selectedAgent?: Agent;
@@ -568,6 +584,7 @@ function ModuleSurface({
   streamFrames: Record<StreamKind, StreamFrame>;
   streamStats: Record<StreamKind, StreamStats>;
   latestCommand?: Command;
+  keycaptureActive: boolean;
 }) {
   const Icon = module.icon;
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -578,6 +595,8 @@ function ModuleSurface({
   const activeStats = activeStream ? streamStats[activeStream] : emptyStreamStats;
   const activeFrame = activeStream ? streamFrames[activeStream] : null;
   const liveRunning = activeStats.status === "running";
+  const liveStarting = activeStats.status === "starting";
+  const liveActive = liveRunning || liveStarting;
 
   async function togglePreviewFullscreen() {
     const preview = previewRef.current;
@@ -601,7 +620,7 @@ function ModuleSurface({
       <div className={`module-preview ${isDataModule ? "data-layout" : ""}`}>
         <div className="module-actions">
           <div className="action-row">
-            {renderControls(module.id, runCommand, liveRunning)}
+            {renderControls(module.id, runCommand, liveRunning, liveActive, keycaptureActive)}
             <button className="secondary" onClick={() => refresh()}>Refresh audit trail</button>
           </div>
           {isLiveModule && (
@@ -642,11 +661,11 @@ function ModuleSurface({
   );
 }
 
-function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean) {
+function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, keycaptureActive: boolean) {
   if (moduleId === "screen" || moduleId === "webcam") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand(`${moduleId}.live.start`, { fps: 10, quality: 65 })}>
+        <button className="primary" onClick={() => runCommand(`${moduleId}.live.start`, { fps: 10, quality: 65 })} disabled={liveActive}>
           <Play size={16} /> Start Live
         </button>
         <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={!liveRunning}>
@@ -698,8 +717,8 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   if (moduleId === "keycapture") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand("keycapture.start")}>Start Visible Session</button>
-        <button className="secondary" onClick={() => runCommand("keycapture.stop")}>Stop Session</button>
+        <button className="primary" onClick={() => runCommand("keycapture.start")} disabled={keycaptureActive}>Start Visible Session</button>
+        <button className="secondary" onClick={() => runCommand("keycapture.stop")} disabled={!keycaptureActive}>Stop Session</button>
         <button className="secondary" onClick={() => runCommand("keycapture.export")}>Export Text</button>
       </div>
     );
@@ -908,6 +927,27 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+
+function commandRequiresApproval(commandType: string): boolean {
+  return new Set([
+    "app.list",
+    "app.start",
+    "app.stop",
+    "process.list",
+    "process.kill",
+    "files.list",
+    "files.download",
+    "screen.live.start",
+    "screen.screenshot",
+    "webcam.live.start",
+    "webcam.snapshot",
+    "keycapture.start",
+    "keycapture.export",
+    "power.shutdown",
+    "power.restart",
+    "power.logout",
+  ]).has(commandType);
+}
 function defaultPayload(commandType: string): Record<string, unknown> {
   if (commandType === "files.list") return { path: "" };
   if (commandType.endsWith("live.start")) return { fps: 10, quality: 65 };

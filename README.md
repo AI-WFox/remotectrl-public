@@ -19,8 +19,9 @@ The legacy material in `Resource/` is reference-only. The implementation in this
 Remote-control capabilities can be abused when implemented as hidden tooling. RemoteCtrl intentionally avoids stealth behavior:
 
 - Agents are visible desktop applications.
-- Sensitive actions require local approval.
-- Screen, webcam, file download, power actions, and key-capture sessions are audited.
+- Remote actions require local approval by default.
+- Agent users can allow a command family for the current session only; approvals reset on disconnect/restart/manual reset.
+- Screen, webcam, files, applications, processes, power actions, and key-capture sessions are audited.
 - Key capture is demo-scoped and visible, not a background/global keylogger.
 - File access is restricted to configured allowed folders.
 - Power commands default to dry-run mode until explicitly enabled.
@@ -124,4 +125,4 @@ The E2E scripts cover both a mock WebSocket agent and the real headless agent co
 2. Open dashboard.
 3. Create or copy an enrollment token.
 4. Start agent app and enroll it with backend URL + token.
-5. Run safe commands: process list, applications list, screenshot with approval, file browse/download, webcam approval, and audit review.
+5. Run commands with local approval: process list, applications list, file browse/download, screen/webcam live, key capture, and audit review.
