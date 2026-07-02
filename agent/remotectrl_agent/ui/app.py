@@ -149,7 +149,12 @@ class AgentApp(tk.Tk):
     def request_approval_threadsafe(self, message: dict) -> dict:
         response: queue.Queue[dict] = queue.Queue(maxsize=1)
         self.ui_queue.put(("approval", (message, response)))
-        return response.get()
+        try:
+            return response.get(timeout=90)
+        except queue.Empty:
+            command_type = message.get("command_type", "remote action")
+            self.ui_queue.put(("log", f"Approval timed out: {command_type}"))
+            return {"approved": False, "approval_mode": "prompt_timeout", "policy_scope": "single_command"}
 
     def process_ui_queue(self) -> None:
         while True:
@@ -166,37 +171,95 @@ class AgentApp(tk.Tk):
                 decision = self.show_approval_dialog(message)
                 response.put(decision)
                 self.append_log(f"Approval {'granted' if decision.get('approved') else 'denied'}: {command_type}")
+            elif kind == "log":
+                self.append_log(str(payload))
         self.refresh_session_status()
         self.after(200, self.process_ui_queue)
 
+    def present_for_approval(self) -> None:
+        try:
+            if self.state() == "iconic":
+                self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.focus_force()
+            self.after(700, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+
+    def center_child_window(self, win: tk.Toplevel) -> None:
+        self.update_idletasks()
+        win.update_idletasks()
+        parent_width = max(self.winfo_width(), 1)
+        parent_height = max(self.winfo_height(), 1)
+        child_width = win.winfo_width()
+        child_height = win.winfo_height()
+        if parent_width <= 1 or parent_height <= 1:
+            x = max(0, (win.winfo_screenwidth() - child_width) // 2)
+            y = max(0, (win.winfo_screenheight() - child_height) // 2)
+        else:
+            x = self.winfo_rootx() + max(0, (parent_width - child_width) // 2)
+            y = self.winfo_rooty() + max(0, (parent_height - child_height) // 2)
+        win.geometry(f"+{x}+{y}")
 
     def show_approval_dialog(self, message: dict) -> dict:
         command_type = str(message.get("command_type", "remote action"))
         payload = message.get("payload") or {}
         decision = {"approved": False, "approval_mode": "prompt_once", "policy_scope": "single_command"}
+        self.present_for_approval()
+        self.append_log(f"Approval prompt shown: {command_type}")
         win = tk.Toplevel(self)
         win.title("RemoteCtrl Approval")
-        win.geometry("520x300")
+        win.geometry("560x340")
         win.transient(self)
         win.grab_set()
         win.configure(bg="#ffffff")
+        win.attributes("-topmost", True)
         ttk.Label(win, text="Allow remote action?", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=20, pady=(18, 6))
         ttk.Label(win, text=command_type, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20)
-        ttk.Label(win, text=self.approval_summary(payload), wraplength=470).pack(anchor="w", padx=20, pady=(10, 14))
+        ttk.Label(win, text=self.approval_summary(payload), wraplength=510).pack(anchor="w", padx=20, pady=(10, 14))
         ttk.Label(win, text="This decision will be audited by the gateway.").pack(anchor="w", padx=20, pady=(0, 14))
+        countdown = tk.StringVar(value="Auto-deny in 90s if no response.")
+        ttk.Label(win, textvariable=countdown, foreground="#b42318").pack(anchor="w", padx=20, pady=(0, 8))
         buttons = ttk.Frame(win)
         buttons.pack(fill="x", padx=20, pady=(8, 18))
+        closed = {"done": False}
+        seconds_left = {"value": 90}
 
-        def choose(approved: bool, scope: str) -> None:
+        def choose(approved: bool, scope: str, mode: str = "prompt_once") -> None:
+            if closed["done"]:
+                return
+            closed["done"] = True
             decision["approved"] = approved
-            decision["approval_mode"] = "prompt_once"
+            decision["approval_mode"] = mode
             decision["policy_scope"] = scope
-            win.destroy()
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        def tick() -> None:
+            if closed["done"]:
+                return
+            seconds_left["value"] -= 1
+            if seconds_left["value"] <= 0:
+                choose(False, "single_command", "prompt_timeout")
+                return
+            countdown.set(f"Auto-deny in {seconds_left['value']}s if no response.")
+            win.after(1000, tick)
 
         ttk.Button(buttons, text="Deny", command=lambda: choose(False, "single_command")).pack(side="left")
         ttk.Button(buttons, text="Allow once", command=lambda: choose(True, "single_command")).pack(side="left", padx=8)
         ttk.Button(buttons, text="Allow this action for this session", command=lambda: choose(True, "current_session")).pack(side="left", padx=8)
         win.protocol("WM_DELETE_WINDOW", lambda: choose(False, "single_command"))
+        self.center_child_window(win)
+        win.after(50, lambda: (win.lift(), win.focus_force()))
+        win.after(700, lambda: win.attributes("-topmost", False))
+        win.after(1000, tick)
         self.wait_window(win)
         return decision
 
