@@ -4,7 +4,6 @@ import base64
 import csv
 import io
 import os
-import platform
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -37,6 +36,15 @@ APP_PRESETS = {
         r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
         r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
     ],
+}
+
+APP_TITLE_ALIASES = {
+    "notepad": ["notepad", "untitled"],
+    "calculator": ["calculator"],
+    "paint": ["paint"],
+    "explorer": ["file explorer", "this pc", "downloads", "documents"],
+    "chrome": ["chrome"],
+    "brave": ["brave"],
 }
 
 
@@ -122,8 +130,17 @@ class CommandHandlers:
             raise RuntimeError("psutil is required for guarded process kill")
 
     def app_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        if platform.system() != "Windows":
+        if os.name != "nt":
             return {"items": [], "count": 0, "source": "unsupported"}
+        try:
+            items = self._visible_windows()
+            return {"items": items, "count": len(items), "source": "win32"}
+        except Exception as exc:
+            fallback = self._app_list_powershell()
+            fallback["fallback_error"] = str(exc)
+            return fallback
+
+    def _app_list_powershell(self) -> dict[str, Any]:
         ps = (
             "Get-Process | Where-Object {$_.MainWindowTitle} | "
             "Select-Object Id,ProcessName,MainWindowTitle,MainWindowHandle | ConvertTo-Json"
@@ -148,6 +165,65 @@ class CommandHandlers:
             return {"items": items, "count": len(items), "source": "powershell"}
         except Exception as exc:
             return {"items": [], "count": 0, "source": "powershell", "error": str(exc)}
+
+    def _visible_windows(self) -> list[dict[str, Any]]:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        items: list[dict[str, Any]] = []
+
+        try:
+            import psutil
+        except Exception:
+            psutil = None
+
+        try:
+            dwmapi = ctypes.windll.dwmapi
+        except Exception:
+            dwmapi = None
+
+        def is_cloaked(hwnd: int) -> bool:
+            if not dwmapi:
+                return False
+            cloaked = ctypes.c_int(0)
+            # DWMWA_CLOAKED = 14. Cloaked windows are not visible to the user.
+            result = dwmapi.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+            return result == 0 and cloaked.value != 0
+
+        enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def enum_proc(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd) or is_cloaked(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            title_buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, length + 1)
+            title = title_buffer.value.strip()
+            if not title:
+                return True
+            class_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_buffer, 256)
+            class_name = class_buffer.value
+            if title.lower() == "program manager" or class_name in {"Progman", "WorkerW", "Shell_TrayWnd"}:
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process_name = "unknown"
+            if psutil and pid.value:
+                try:
+                    process_name = psutil.Process(pid.value).name()
+                except Exception:
+                    process_name = "unknown"
+            items.append({"pid": int(pid.value), "name": process_name, "title": title, "hwnd": int(hwnd)})
+            return True
+
+        callback = enum_proc_type(enum_proc)
+        user32.EnumWindows(callback, 0)
+        items.sort(key=lambda item: (str(item.get("name") or "").lower(), str(item.get("title") or "").lower()))
+        return items[:250]
 
     def app_start(self, payload: dict[str, Any]) -> dict[str, Any]:
         path = self._resolve_app_path(payload)
@@ -350,32 +426,49 @@ class CommandHandlers:
         return None
 
     def _find_existing_app(self, payload: dict[str, Any], path: str) -> dict[str, Any] | None:
-        if platform.system() != "Windows":
+        if os.name != "nt":
             return None
-        target_names = {Path(path).stem.lower()}
+        target_names = {self._normalize_process_name(Path(path).name), self._normalize_process_name(Path(path).stem)}
         preset = str(payload.get("preset") or "").strip().lower()
         if preset:
-            target_names.add(preset)
+            target_names.add(self._normalize_process_name(preset))
             for candidate in APP_PRESETS.get(preset, []):
-                target_names.add(Path(candidate).stem.lower())
-        target_title = str(payload.get("title") or "").strip().lower()
+                target_names.add(self._normalize_process_name(Path(candidate).name))
+                target_names.add(self._normalize_process_name(Path(candidate).stem))
+        target_names.discard("")
+        target_titles = {str(payload.get("title") or "").strip().lower()}
+        if preset:
+            target_titles.update(APP_TITLE_ALIASES.get(preset, []))
+        target_titles.discard("")
         for item in self.app_list({}).get("items", []):
-            name = str(item.get("name") or "").lower()
+            name = self._normalize_process_name(str(item.get("name") or ""))
             title = str(item.get("title") or "").lower()
-            if name in target_names or (target_title and target_title in title):
+            if name in target_names or any(alias in title for alias in target_titles):
                 return item
         return None
 
+    def _normalize_process_name(self, name: str) -> str:
+        normalized = name.strip().lower()
+        if normalized.endswith(".exe"):
+            normalized = normalized[:-4]
+        return normalized
+
     def _focus_window(self, hwnd: Any) -> bool:
-        if platform.system() != "Windows" or not hwnd:
+        if os.name != "nt" or not hwnd:
             return False
         try:
             import ctypes
 
             handle = int(hwnd)
             user32 = ctypes.windll.user32
-            user32.ShowWindow(handle, 9)
-            return bool(user32.SetForegroundWindow(handle))
+            SW_RESTORE = 9
+            if user32.IsIconic(handle):
+                user32.ShowWindow(handle, SW_RESTORE)
+            else:
+                user32.ShowWindow(handle, SW_RESTORE)
+            user32.BringWindowToTop(handle)
+            user32.SetForegroundWindow(handle)
+            return int(user32.GetForegroundWindow()) == handle or bool(user32.IsWindowVisible(handle))
         except Exception:
             return False
 

@@ -199,6 +199,33 @@ def test_app_start_focuses_existing_window_without_launch(monkeypatch, tmp_path:
     assert launched == []
 
 
+def test_app_start_focuses_uwp_hosted_window_by_title(monkeypatch, tmp_path: Path):
+    fake_exe = tmp_path / "calc.exe"
+    fake_exe.write_text("", encoding="utf-8")
+    launched = []
+
+    import remotectrl_agent.core.handlers as handlers_module
+
+    monkeypatch.setitem(handlers_module.APP_PRESETS, "calculator", [str(fake_exe)])
+    monkeypatch.setattr(handlers_module.subprocess, "Popen", lambda args, close_fds=True: launched.append(args))
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    monkeypatch.setattr(
+        handlers,
+        "app_list",
+        lambda payload: {
+            "items": [{"pid": 10, "name": "ApplicationFrameHost.exe", "title": "Calculator", "hwnd": 123}],
+            "count": 1,
+        },
+    )
+    monkeypatch.setattr(handlers, "_focus_window", lambda hwnd: True)
+
+    result = handlers.app_start({"preset": "calculator", "mode": "focus_existing"})
+
+    assert result["status"] == "focused_existing"
+    assert result["window"]["title"] == "Calculator"
+    assert launched == []
+
+
 def test_process_list_includes_visible_apps(monkeypatch):
     class FakeProc:
         info = {"pid": 11, "name": "python.exe", "status": "running", "cpu_percent": 0.0, "memory_info": SimpleNamespace(rss=1048576)}
