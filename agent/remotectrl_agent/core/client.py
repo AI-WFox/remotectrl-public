@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import platform
 import queue
@@ -244,15 +245,17 @@ class AgentClient:
             self.active_streams.pop(stream, None)
 
     def _stream_frames(self, ws, command_id: str, agent_id: str, stream: str, command_type: str, payload: dict, stop_stream: threading.Event) -> None:
+        if stream == "webcam":
+            self._stream_webcam_frames(ws, command_id, agent_id, payload, stop_stream)
+            return
         fps = min(max(float(payload.get("fps", 10)), 1.0), 15.0)
-        handler_type = "screen.screenshot" if command_type.startswith("screen.") else "webcam.snapshot"
         frame_count = 0
         started = time.time()
         self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "running", "fps": fps})
         try:
             while not stop_stream.is_set() and not self.stop_event.is_set():
                 frame_started = time.time()
-                frame = self.handlers.handle(handler_type, payload)
+                frame = self.handlers.handle("screen.screenshot", payload)
                 image = frame.get("image")
                 if image:
                     self._send(
@@ -292,6 +295,76 @@ class AgentClient:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
         finally:
             self.active_streams.pop(stream, None)
+
+    def _stream_webcam_frames(self, ws, command_id: str, agent_id: str, payload: dict, stop_stream: threading.Event) -> None:
+        fps = min(max(float(payload.get("fps", 15)), 1.0), 20.0)
+        quality = min(max(int(payload.get("quality", 40)), 25), 85)
+        width = int(payload.get("width", 640) or 640)
+        height = int(payload.get("height", 360) or 360)
+        camera_index = int(payload.get("camera_index", 0))
+        frame_count = 0
+        started = time.time()
+        cap = None
+        self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "running", "fps": fps})
+        try:
+            import cv2
+
+            backend = getattr(cv2, "CAP_DSHOW", 0)
+            cap = cv2.VideoCapture(camera_index, backend) if backend else cv2.VideoCapture(camera_index)
+            if not cap.isOpened() and backend:
+                cap.release()
+                cap = cv2.VideoCapture(camera_index)
+            if not cap.isOpened():
+                raise RuntimeError(f"Camera {camera_index} is not available")
+            if hasattr(cv2, "VideoWriter_fourcc") and hasattr(cv2, "CAP_PROP_FOURCC"):
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            while not stop_stream.is_set() and not self.stop_event.is_set():
+                frame_started = time.time()
+                ok, frame = cap.read()
+                if not ok:
+                    raise RuntimeError("Unable to read webcam frame")
+                if width > 0 and height > 0:
+                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                if not ok:
+                    raise RuntimeError("Unable to encode webcam frame")
+                self._send(
+                    ws,
+                    {
+                        "type": "stream_frame",
+                        "command_id": command_id,
+                        "agent_id": agent_id,
+                        "stream": "webcam",
+                        "mime": "image/jpeg",
+                        "frame": base64.b64encode(encoded.tobytes()).decode(),
+                        "frame_index": frame_count + 1,
+                        "sent_at": time.time(),
+                    },
+                )
+                frame_count += 1
+                elapsed = time.time() - frame_started
+                stop_stream.wait(max(0.0, (1 / fps) - elapsed))
+            self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "stopped", "fps": fps})
+            self._send(
+                ws,
+                result(
+                    command_id,
+                    agent_id,
+                    True,
+                    payload={"stream": "webcam", "frames": frame_count, "duration_seconds": round(time.time() - started, 2), "fps": fps, "width": width, "height": height, "quality": quality},
+                ),
+            )
+        except Exception as exc:
+            self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "failed", "fps": fps, "error": str(exc)})
+            self._send(ws, result(command_id, agent_id, False, error=str(exc)))
+        finally:
+            if cap is not None:
+                cap.release()
+            self.active_streams.pop("webcam", None)
 
     def _send(self, ws, message: dict) -> None:
         with self.send_lock:

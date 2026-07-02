@@ -702,7 +702,12 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
     return (
       <div className="control-stack">
         {moduleId === "webcam" && <button className="secondary" onClick={() => runCommand("webcam.list")} disabled={commandDisabled}>Check Cameras</button>}
-        <button className="primary" title={webcamMessage || undefined} onClick={() => runCommand(`${moduleId}.live.start`, { fps: 10, quality: 65, camera_index: 0 })} disabled={commandDisabled || liveActive || !webcamReady}>
+        <button
+          className="primary"
+          title={webcamMessage || undefined}
+          onClick={() => runCommand(`${moduleId}.live.start`, moduleId === "webcam" ? { fps: 15, quality: 40, camera_index: 0, width: 640, height: 360 } : { fps: 10, quality: 65 })}
+          disabled={commandDisabled || liveActive || !webcamReady}
+        >
           <Play size={16} /> Start Live
         </button>
         <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={commandDisabled || !liveRunning}>
