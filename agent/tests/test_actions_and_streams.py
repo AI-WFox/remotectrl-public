@@ -274,7 +274,7 @@ def test_webcam_list_reports_missing_opencv(monkeypatch):
     assert "missing cv2" in result["import_error"]
 
 
-def test_stop_commands_ignore_session_cached_approval():
+def test_session_cached_approval_covers_matching_session_stop():
     class FakeHandlers:
         def handle(self, command_type, payload):
             return {"status": "ok"}
@@ -311,6 +311,38 @@ def test_stop_commands_ignore_session_cached_approval():
     )
 
     approvals = [message for message in ws.messages if message["type"] == "approval_response"]
-    assert approval_calls == ["activity.start", "activity.stop"]
+    assert approval_calls == ["activity.start"]
+    assert approvals[-1]["approval_mode"] == "session_cached"
+    assert approvals[-1]["policy_scope"] == "current_session"
+
+
+def test_session_cached_approval_does_not_cross_sensitive_actions():
+    class FakeHandlers:
+        def handle(self, command_type, payload):
+            return {"status": "ok"}
+
+    approval_calls = []
+
+    def approve_for_session(command):
+        approval_calls.append(command["command_type"])
+        return {"approved": True, "approval_mode": "prompt_once", "policy_scope": "current_session"}
+
+    ws = FakeWs()
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, approve_for_session)
+    for command_id, command_type in [("list-1", "process.list"), ("kill-1", "process.kill")]:
+        client._handle_message(
+            ws,
+            {
+                "type": "command",
+                "command_id": command_id,
+                "agent_id": "agent-1",
+                "command_type": command_type,
+                "payload": {},
+                "requires_approval": True,
+            },
+        )
+
+    approvals = [message for message in ws.messages if message["type"] == "approval_response"]
+    assert approval_calls == ["process.list", "process.kill"]
     assert approvals[-1]["approval_mode"] == "prompt_once"
-    assert approvals[-1]["policy_scope"] == "single_command"
+    assert approvals[-1]["policy_scope"] == "current_session"

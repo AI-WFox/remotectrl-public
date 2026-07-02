@@ -171,19 +171,16 @@ class AgentClient:
 
     def _approval_decision(self, message: dict) -> dict[str, Any]:
         command_type = message.get("command_type", "")
-        stop_commands = {"screen.live.stop", "webcam.live.stop", "keycapture.stop", "activity.stop"}
         family = self._approval_family(command_type)
-        if command_type not in stop_commands and family in self.session_approvals:
+        if family in self.session_approvals:
             return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
         raw = self.request_approval(message)
         if isinstance(raw, bool):
             return {"approved": raw, "approval_mode": "prompt_once", "policy_scope": "single_command"}
         approved = bool(raw.get("approved"))
         policy_scope = str(raw.get("policy_scope") or "single_command")
-        if approved and policy_scope == "current_session" and command_type not in stop_commands:
+        if approved and policy_scope == "current_session":
             self.session_approvals.add(family)
-        if command_type in stop_commands:
-            policy_scope = "single_command"
         return {
             "approved": approved,
             "approval_mode": str(raw.get("approval_mode") or "prompt_once"),
@@ -191,24 +188,19 @@ class AgentClient:
         }
 
     def _approval_family(self, command_type: str) -> str:
-        if command_type.startswith("screen."):
-            return "screen"
-        if command_type.startswith("webcam."):
-            return "webcam"
-        if command_type.startswith("keycapture."):
-            return "keycapture"
-        if command_type.startswith("activity."):
-            return "activity"
-        if command_type.startswith("files."):
-            return "files"
-        if command_type.startswith("process."):
-            return "processes"
-        if command_type.startswith("app."):
-            return "applications"
-        if command_type.startswith("power."):
-            return "power"
+        paired_session_actions = {
+            "screen.live.start": "screen.live",
+            "screen.live.stop": "screen.live",
+            "webcam.live.start": "webcam.live",
+            "webcam.live.stop": "webcam.live",
+            "activity.start": "activity.session",
+            "activity.stop": "activity.session",
+            "keycapture.start": "keycapture.session",
+            "keycapture.stop": "keycapture.session",
+        }
+        if command_type in paired_session_actions:
+            return paired_session_actions[command_type]
         return command_type
-
     def _stream_name(self, command_type: str) -> str:
         return "screen" if command_type.startswith("screen.") else "webcam"
 
