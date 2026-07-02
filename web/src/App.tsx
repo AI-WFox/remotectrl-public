@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   Square,
   Sun,
+  X,
 } from "lucide-react";
 import { ApiError, createCommand, createEnrollmentToken, dashboardWsUrl, deleteAgent, deleteOfflineAgents, loadDashboard, login } from "./lib/api";
 import { mockAgents, mockAudit, mockCommands } from "./lib/mock";
@@ -28,10 +29,10 @@ import type { Agent, AuditEvent, Command } from "./lib/types";
 const modules = [
   { id: "applications", label: "Applications", icon: AppWindow, command: "app.list", safe: false },
   { id: "processes", label: "Processes", icon: Activity, command: "process.list", safe: false },
-  { id: "screen", label: "Screen", icon: Monitor, command: "screen.live.start", safe: false },
-  { id: "files", label: "Files", icon: FileDown, command: "files.list", safe: false },
-  { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.live.start", safe: false },
-  { id: "keycapture", label: "Key Capture", icon: KeyRound, command: "keycapture.start", safe: false },
+  { id: "screen", label: "Screen", icon: Monitor, command: "screen.screenshot", safe: false },
+  { id: "files", label: "Files", icon: FileDown, command: "files.roots", safe: false },
+  { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.list", safe: false },
+  { id: "keycapture", label: "Activity Capture", icon: KeyRound, command: "activity.start", safe: false },
   { id: "power", label: "Power", icon: Power, command: "power.shutdown", safe: false },
 ];
 
@@ -60,6 +61,7 @@ type Theme = "light" | "dark";
 type StreamKind = "screen" | "webcam";
 type StreamFrame = { mime: string; frame: string } | null;
 type StreamStats = { status: string; fps: number; frames: number; latencyMs: number };
+type AppStartMode = "focus_existing" | "new_instance";
 
 const emptyStreamStats: StreamStats = { status: "idle", fps: 0, frames: 0, latencyMs: 0 };
 
@@ -75,6 +77,8 @@ export function App() {
   const [loginError, setLoginError] = useState("");
   const [notice, setNotice] = useState("Demo data is loaded until the gateway responds.");
   const [enrollmentToken, setEnrollmentToken] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [appStartMode, setAppStartMode] = useState<AppStartMode>("focus_existing");
   const [streamFrames, setStreamFrames] = useState<Record<StreamKind, StreamFrame>>({ screen: null, webcam: null });
   const [streamStats, setStreamStats] = useState<Record<StreamKind, StreamStats>>({
     screen: emptyStreamStats,
@@ -84,9 +88,9 @@ export function App() {
   const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0], [agents, selectedAgentId]);
   const keycaptureActive = useMemo(() => {
     const latestStateCommand = commands.find(
-      (command) => command.agent_id === selectedAgent?.id && ["keycapture.start", "keycapture.stop"].includes(command.type) && command.status === "succeeded",
+      (command) => command.agent_id === selectedAgent?.id && ["activity.start", "activity.stop", "keycapture.start", "keycapture.stop"].includes(command.type) && command.status === "succeeded",
     );
-    return latestStateCommand?.type === "keycapture.start";
+    return latestStateCommand?.type === "activity.start" || latestStateCommand?.type === "keycapture.start";
   }, [commands, selectedAgent?.id]);
 
   useEffect(() => {
@@ -221,8 +225,8 @@ export function App() {
       setNotice(`${startedStream} stream is already ${streamStats[startedStream].status}. Stop it before starting again.`);
       return;
     }
-    if (commandType === "keycapture.start" && keycaptureActive) {
-      setNotice("Key Capture session is already running. Stop it before starting again.");
+    if ((commandType === "activity.start" || commandType === "keycapture.start") && keycaptureActive) {
+      setNotice("Activity Capture session is already running. Stop it before starting again.");
       return;
     }
     if (startedStream) {
@@ -237,7 +241,7 @@ export function App() {
         payload,
         requires_approval: commandRequiresApproval(commandType),
         status: commandRequiresApproval(commandType) ? "pending_approval" : "succeeded",
-        result: demoResult(commandType),
+        result: demoResult(commandType, payload),
         created_by: "demo-operator",
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -250,7 +254,7 @@ export function App() {
           action: "command.created",
           agent_id: selectedAgent.id,
           command_id: command.id,
-          detail: { type: commandType, demo: true },
+          detail: { type: commandType, target: selectedAgent.name, demo: true },
           created_at: new Date().toISOString(),
         },
         ...items,
@@ -259,13 +263,7 @@ export function App() {
       return;
     }
     if (selectedAgent.status !== "online") {
-      const onlineAgent = agents.find((agent) => agent.status === "online");
-      if (onlineAgent) {
-        setSelectedAgentId(onlineAgent.id);
-        setNotice(`Selected agent was offline. Switched to online agent: ${onlineAgent.name}. Run the command again.`);
-      } else {
-        setNotice("No online agent is available. Connect the Windows agent before running commands.");
-      }
+      setNotice(`${selectedAgent.name} is offline. Select an online agent before running commands.`);
       return;
     }
     try {
@@ -362,10 +360,15 @@ export function App() {
     return <LoginScreen onLogin={doLogin} onDemo={enterDemoMode} error={loginError} theme={theme} setTheme={setTheme} />;
   }
 
+  const search = searchQuery.trim().toLowerCase();
+  const filteredAgents = filterBySearch(agents, search);
+  const filteredCommands = filterBySearch(commands, search);
+  const filteredAudit = filterBySearch(audit, search);
   const onlineCount = agents.filter((agent) => agent.status === "online").length;
   const pendingApprovals = commands.filter((command) => command.status === "pending_approval").length;
   const activeModule = modules.find((item) => item.id === selectedModule) ?? modules[0];
-  const latestModuleCommand = commands.find((command) => moduleCommandTypes(selectedModule).includes(command.type));
+  const latestModuleCommand = commands.find((command) => command.agent_id === selectedAgent?.id && moduleCommandTypes(selectedModule).includes(command.type));
+  const commandDisabled = !selectedAgent || (!demoMode && selectedAgent.status !== "online");
 
   return (
     <div className="app-shell">
@@ -385,7 +388,7 @@ export function App() {
               <button onClick={clearOfflineAgents}>Clear offline</button>
             )}
           </div>
-          {agents.map((agent) => (
+          {filteredAgents.map((agent) => (
             <div key={agent.id} className={`agent-row ${agent.id === selectedAgentId ? "active" : ""}`}>
               <button className="agent-pick" onClick={() => setSelectedAgentId(agent.id)}>
                 <span className={`status-dot ${agent.status}`} />
@@ -400,10 +403,10 @@ export function App() {
               </button>
             </div>
           ))}
-          {!agents.length && (
+          {!filteredAgents.length && (
             <div className="empty-sidebar-state">
-              <strong>No agents yet</strong>
-              <span>Create an enrollment token and connect the Windows agent.</span>
+              <strong>No agents found</strong>
+              <span>{search ? "Adjust search or clear it." : "Create an enrollment token and connect the Windows agent."}</span>
             </div>
           )}
         </div>
@@ -430,7 +433,8 @@ export function App() {
         <header className="topbar">
           <div className="search">
             <Search size={18} />
-            <input placeholder="Search commands, agents, audit events" />
+            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search agents, commands, audit, results" />
+            {searchQuery && <button className="search-clear" onClick={() => setSearchQuery("")} title="Clear search"><X size={16} /></button>}
           </div>
           <button className="icon-button" onClick={toggleFullscreen} title="Toggle fullscreen">
             {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
@@ -453,7 +457,7 @@ export function App() {
           </div>
           <div className="hero-actions">
             <button className="secondary" onClick={makeEnrollmentToken}>Create enrollment token</button>
-            <button className="primary" onClick={() => runCommand(activeModule.command)}>
+            <button className="primary" disabled={commandDisabled} onClick={() => runCommand(activeModule.command)}>
               Run selected module
             </button>
           </div>
@@ -488,20 +492,24 @@ export function App() {
               streamStats={streamStats}
               latestCommand={latestModuleCommand}
               keycaptureActive={keycaptureActive}
+              appStartMode={appStartMode}
+              setAppStartMode={setAppStartMode}
+              commandDisabled={commandDisabled}
+              search={search}
             />
         </section>
 
         <section className="panel activity-section">
           <div className="section-heading">
             <h2>Command Timeline</h2>
-            <span>{commands.length} logged</span>
+            <span>{filteredCommands.length}/{commands.length} shown</span>
           </div>
           <div className="activity-list">
-            {commands.slice(0, 8).map((command) => (
+            {filteredCommands.slice(0, 8).map((command) => (
               <div className="activity-row" key={command.id}>
                 <span className={`status-pill ${command.status}`}>{command.status}</span>
                 <strong>{command.type}</strong>
-                <small>{command.created_by}</small>
+                <small>{agentName(agents, command.agent_id)} / {command.created_by}</small>
                 <time>{formatTime(command.created_at)}</time>
               </div>
             ))}
@@ -514,10 +522,10 @@ export function App() {
               <h2>Audit</h2>
               <p>Every sensitive action must leave a trail.</p>
             </div>
-            <span>{audit.length} events</span>
+            <span>{filteredAudit.length}/{audit.length} shown</span>
           </div>
           <div className="activity-list">
-            {audit.slice(0, 10).map((event) => (
+            {filteredAudit.slice(0, 10).map((event) => (
               <div className="activity-row audit-row" key={event.id}>
                 <CheckCircle2 size={16} />
                 <strong>{event.action}</strong>
@@ -576,6 +584,10 @@ function ModuleSurface({
   streamStats,
   latestCommand,
   keycaptureActive,
+  appStartMode,
+  setAppStartMode,
+  commandDisabled,
+  search,
 }: {
   module: (typeof modules)[number];
   selectedAgent?: Agent;
@@ -585,6 +597,10 @@ function ModuleSurface({
   streamStats: Record<StreamKind, StreamStats>;
   latestCommand?: Command;
   keycaptureActive: boolean;
+  appStartMode: AppStartMode;
+  setAppStartMode: (mode: AppStartMode) => void;
+  commandDisabled: boolean;
+  search: string;
 }) {
   const Icon = module.icon;
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -617,10 +633,11 @@ function ModuleSurface({
           <p>{module.safe ? "Runs immediately and records command output." : "Requires visible local approval on the agent."}</p>
         </div>
       </div>
+      <div className="target-strip"><strong>Target</strong><span>{selectedAgent ? `${selectedAgent.name} / ${selectedAgent.ip_address ?? selectedAgent.hostname} / ${selectedAgent.status}` : "No agent selected"}</span></div>
       <div className={`module-preview ${isDataModule ? "data-layout" : ""}`}>
         <div className="module-actions">
           <div className="action-row">
-            {renderControls(module.id, runCommand, liveRunning, liveActive, keycaptureActive)}
+            {renderControls(module.id, runCommand, liveRunning, liveActive, keycaptureActive, appStartMode, setAppStartMode, commandDisabled)}
             <button className="secondary" onClick={() => refresh()}>Refresh audit trail</button>
           </div>
           {isLiveModule && (
@@ -654,33 +671,39 @@ function ModuleSurface({
               </div>
             </div>
           )}
-          <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
+          <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} search={search} />
         </div>
       </div>
     </>
   );
 }
 
-function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, keycaptureActive: boolean) {
+function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, keycaptureActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean) {
   if (moduleId === "screen" || moduleId === "webcam") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand(`${moduleId}.live.start`, { fps: 10, quality: 65 })} disabled={liveActive}>
+        {moduleId === "webcam" && <button className="secondary" onClick={() => runCommand("webcam.list")} disabled={commandDisabled}>Check Cameras</button>}
+        <button className="primary" onClick={() => runCommand(`${moduleId}.live.start`, { fps: 10, quality: 65, camera_index: 0 })} disabled={commandDisabled || liveActive}>
           <Play size={16} /> Start Live
         </button>
-        <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={!liveRunning}>
+        <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={commandDisabled || !liveRunning}>
           <Square size={16} /> Stop Live
         </button>
+        {moduleId === "screen" && <button className="secondary" onClick={() => runCommand("screen.screenshot", { quality: 75 })} disabled={commandDisabled}>Capture Screenshot</button>}
       </div>
     );
   }
   if (moduleId === "applications") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand("app.list")}>Refresh Applications</button>
+        <button className="primary" onClick={() => runCommand("app.list")} disabled={commandDisabled}>Refresh Applications</button>
+        <div className="segmented-control" aria-label="Application start mode">
+          <button className={appStartMode === "focus_existing" ? "active" : ""} onClick={() => setAppStartMode("focus_existing")}>Focus existing</button>
+          <button className={appStartMode === "new_instance" ? "active" : ""} onClick={() => setAppStartMode("new_instance")}>New instance</button>
+        </div>
         <div className="preset-grid">
           {appPresets.map((preset) => (
-            <button className="secondary compact" key={preset.id} onClick={() => runCommand("app.start", { preset: preset.id })}>
+            <button className="secondary compact" key={preset.id} disabled={commandDisabled} onClick={() => runCommand("app.start", { preset: preset.id, mode: appStartMode })}>
               {preset.label}
             </button>
           ))}
@@ -689,10 +712,10 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
     );
   }
   if (moduleId === "processes") {
-    return <button className="primary" onClick={() => runCommand("process.list")}>Refresh Processes</button>;
+    return <button className="primary" onClick={() => runCommand("process.list")} disabled={commandDisabled}>Refresh Processes</button>;
   }
   if (moduleId === "files") {
-    return <button className="primary" onClick={() => runCommand("files.list", { path: "" })}>Browse Allowed Folder</button>;
+    return <button className="primary" onClick={() => runCommand("files.roots")} disabled={commandDisabled}>Choose Folder</button>;
   }
   if (moduleId === "power") {
     return (
@@ -701,6 +724,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
         {["shutdown", "restart", "logout"].map((action) => (
           <button
             className="secondary"
+            disabled={commandDisabled}
             key={action}
             onClick={() => {
               if (window.confirm(`Request ${action} on the agent? The agent still requires local approval.`)) {
@@ -717,16 +741,16 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   if (moduleId === "keycapture") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand("keycapture.start")} disabled={keycaptureActive}>Start Visible Session</button>
-        <button className="secondary" onClick={() => runCommand("keycapture.stop")} disabled={!keycaptureActive}>Stop Session</button>
-        <button className="secondary" onClick={() => runCommand("keycapture.export")}>Export Text</button>
+        <button className="primary" onClick={() => runCommand("activity.start")} disabled={commandDisabled || keycaptureActive}>Start Activity Session</button>
+        <button className="secondary" onClick={() => runCommand("activity.stop")} disabled={commandDisabled || !keycaptureActive}>Stop Session</button>
+        <button className="secondary" onClick={() => runCommand("activity.export")} disabled={commandDisabled}>Export Activity</button>
       </div>
     );
   }
-  return <button className="primary" onClick={() => runCommand("process.list")}>Run</button>;
+  return <button className="primary" onClick={() => runCommand("process.list")} disabled={commandDisabled}>Run</button>;
 }
 
-function ResultView({ moduleId, command, runCommand }: { moduleId: string; command?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+function ResultView({ moduleId, command, runCommand, search }: { moduleId: string; command?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void; search: string }) {
   if (!command) {
     return <div className="empty-result">Run a command to show live results here.</div>;
   }
@@ -746,16 +770,17 @@ function ResultView({ moduleId, command, runCommand }: { moduleId: string; comma
       </div>
     );
   }
-  if (moduleId === "applications") return <ApplicationsResult result={command.result} runCommand={runCommand} />;
-  if (moduleId === "processes") return <ProcessesResult result={command.result} runCommand={runCommand} />;
-  if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} />;
+  if (moduleId === "applications") return <ApplicationsResult result={command.result} runCommand={runCommand} search={search} />;
+  if (moduleId === "processes") return <ProcessesResult result={command.result} runCommand={runCommand} search={search} />;
+  if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} search={search} />;
+  if (moduleId === "screen" || moduleId === "webcam") return <MediaResult command={command} />;
   if (moduleId === "power") return <PowerResult result={command.result} />;
   if (moduleId === "keycapture") return <KeyCaptureResult result={command.result} />;
   return <DeveloperDetails result={command.result} />;
 }
 
-function ApplicationsResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const items = asRecords(result.items).slice(0, 12);
+function ApplicationsResult({ result, runCommand, search }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void; search: string }) {
+  const items = filterBySearch(asRecords(result.items), search).slice(0, 20);
   return (
     <div className="result-list">
       <div className="result-list-heading"><strong>Visible windows</strong><span>{Number(result.count ?? items.length)} found</span></div>
@@ -776,9 +801,11 @@ function ApplicationsResult({ result, runCommand }: { result: Record<string, unk
   );
 }
 
-function ProcessesResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const items = asRecords(result.items)
-    .filter((item) => String(item.name ?? "").trim())
+function ProcessesResult({ result, runCommand, search }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void; search: string }) {
+  const apps = filterBySearch(asRecords(result.apps), search).slice(0, 20);
+  const appPids = new Set(apps.map((item) => String(item.pid)));
+  const items = filterBySearch(asRecords(result.items), search)
+    .filter((item) => String(item.name ?? "").trim() && !appPids.has(String(item.pid)))
     .sort((left, right) => {
       const leftName = String(left.name ?? "").toLowerCase();
       const rightName = String(right.name ?? "").toLowerCase();
@@ -787,10 +814,21 @@ function ProcessesResult({ result, runCommand }: { result: Record<string, unknow
       if (leftProtected !== rightProtected) return leftProtected - rightProtected;
       return String(left.name ?? "").localeCompare(String(right.name ?? ""));
     })
-    .slice(0, 40);
+    .slice(0, 60);
   return (
-    <div className="result-list">
-      <div className="result-list-heading"><strong>Processes</strong><span>{Number(result.count ?? items.length)} found</span></div>
+    <div className="result-list split-list">
+      <div className="result-list-heading"><strong>Running apps</strong><span>{apps.length}/{Number(result.app_count ?? apps.length)} shown</span></div>
+      {apps.map((item) => (
+        <div className="result-row app-row" key={`app-${item.pid}-${item.title}`}>
+          <div className="row-main">
+            <strong>{String(item.title || item.name || "Untitled app")}</strong>
+            <div className="row-meta"><span>{String(item.name ?? "unknown")}</span><span>PID {String(item.pid ?? "-")}</span></div>
+          </div>
+          <button className="row-action" onClick={() => confirmAndRun("Stop this app window?", () => runCommand("app.stop", { pid: item.pid }))}>Stop</button>
+        </div>
+      ))}
+      {!apps.length && <div className="empty-result">No visible app windows match.</div>}
+      <div className="result-list-heading secondary-heading"><strong>Background processes</strong><span>{items.length}/{Number(result.count ?? items.length)} shown</span></div>
       {items.map((item) => {
         const name = String(item.name ?? "").toLowerCase();
         const protectedProcess = protectedProcessNames.has(name);
@@ -819,8 +857,26 @@ function ProcessesResult({ result, runCommand }: { result: Record<string, unknow
   );
 }
 
-function FilesResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const entries = asRecords(result.entries).slice(0, 14);
+function FilesResult({ result, runCommand, search }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void; search: string }) {
+  const roots = filterBySearch(asRecords(result.roots), search);
+  const entries = filterBySearch(asRecords(result.entries), search).slice(0, 80);
+  if (roots.length && !entries.length && !result.path) {
+    return (
+      <div className="result-list">
+        <div className="result-list-heading"><strong>Choose an allowed folder</strong><span>{roots.length} roots</span></div>
+        {roots.map((root) => (
+          <div className="result-row" key={String(root.path)}>
+            <div className="row-main">
+              <strong>{String(root.name || root.path)}</strong>
+              <div className="row-meta"><span>{root.exists ? "Available" : "Missing"}</span><span>{String(root.path)}</span></div>
+            </div>
+            <button className="row-action" disabled={!root.exists || !root.is_dir} onClick={() => runCommand("files.list", { path: root.path })}>Open</button>
+          </div>
+        ))}
+        <DeveloperDetails result={result} />
+      </div>
+    );
+  }
   return (
     <div className="result-list">
       <div className="result-list-heading"><strong>{String(result.path ?? "Allowed folder")}</strong><span>{entries.length} entries</span></div>
@@ -846,6 +902,36 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
   );
 }
 
+
+function MediaResult({ command }: { command: Command }) {
+  const result = command.result ?? {};
+  if (command.type === "webcam.list") {
+    const cameras = asRecords(result.items);
+    return (
+      <div className="result-list">
+        <div className="result-list-heading"><strong>Camera diagnostics</strong><span>{cameras.length} camera(s)</span></div>
+        {Boolean(result.error) && <div className="result-card danger"><span>Webcam issue</span><pre>{String(result.error)}</pre></div>}
+        {cameras.map((camera) => (
+          <div className="result-row" key={String(camera.index)}>
+            <div className="row-main"><strong>{String(camera.label ?? `Camera ${camera.index}`)}</strong><div className="row-meta"><span>Index {String(camera.index)}</span><span>OpenCV ready</span></div></div>
+          </div>
+        ))}
+        <DeveloperDetails result={result} />
+      </div>
+    );
+  }
+  if (typeof result.image === "string" && result.image) {
+    return (
+      <div className="result-list">
+        <div className="result-list-heading"><strong>{command.type === "screen.screenshot" ? "Screenshot" : "Snapshot"}</strong><span>{String(result.width ?? "")} {result.height ? `x ${result.height}` : ""}</span></div>
+        <div className="media-result"><img src={`data:${result.mime ?? "image/jpeg"};base64,${result.image}`} alt={command.type} /></div>
+        <DeveloperDetails result={result} />
+      </div>
+    );
+  }
+  return <div className="state-card"><strong>{String(result.status ?? command.type)}</strong><p>{String(result.stream ?? result.mode ?? result.error ?? "Request updated.")}</p><DeveloperDetails result={result} /></div>;
+}
+
 function PowerResult({ result }: { result: Record<string, unknown> }) {
   return (
     <div className="state-card">
@@ -858,10 +944,17 @@ function PowerResult({ result }: { result: Record<string, unknown> }) {
 }
 
 function KeyCaptureResult({ result }: { result: Record<string, unknown> }) {
+  const events = asRecords(result.events).slice(-30).reverse();
   return (
     <div className="state-card">
-      <strong>{String(result.status ?? result.mode ?? "Key capture")}</strong>
-      {result.text ? <pre>{String(result.text)}</pre> : <p>{String(result.mode ?? "Visible session updated.")}</p>}
+      <strong>{String(result.status ?? result.mode ?? "Activity capture")}</strong>
+      {events.length ? (
+        <div className="mini-log">
+          {events.map((event, index) => (
+            <div key={`${event.time}-${index}`}><span>{String(event.time ?? "")}</span><strong>{String(event.type ?? "event")}</strong><small>{JSON.stringify(event.detail ?? {})}</small></div>
+          ))}
+        </div>
+      ) : result.text ? <pre>{String(result.text)}</pre> : <p>{String(result.mode ?? "Visible session updated.")}</p>}
       <DeveloperDetails result={result} />
     </div>
   );
@@ -878,12 +971,12 @@ function DeveloperDetails({ result }: { result: Record<string, unknown> }) {
 
 function copyForModule(id: string): string {
   const copy: Record<string, string> = {
-    applications: "Enumerate visible windows and app titles.",
-    processes: "Inspect CPU, memory, PID, and process state.",
-    screen: "Capture a screenshot after local consent.",
-    files: "Browse configured allowed folders only.",
-    webcam: "Capture camera media after explicit approval.",
-    keycapture: "Open a visible typing session, never a hidden keylogger.",
+    applications: "Focus existing apps or launch a new approved instance.",
+    processes: "Separate visible apps from background tasks.",
+    screen: "Capture screenshots or stream live after local consent.",
+    files: "Choose an allowed root before browsing files.",
+    webcam: "Check camera diagnostics before live capture.",
+    keycapture: "Visible activity capture session, never a hidden keylogger.",
     power: "Request shutdown/restart/logout with local confirmation.",
   };
   return copy[id] ?? "Remote operation surface.";
@@ -892,11 +985,11 @@ function copyForModule(id: string): string {
 function moduleCommandTypes(moduleId: string): string[] {
   const map: Record<string, string[]> = {
     applications: ["app.list", "app.start", "app.stop"],
-    processes: ["process.list", "process.kill"],
+    processes: ["process.list", "process.kill", "app.stop"],
     screen: ["screen.screenshot", "screen.live.start", "screen.live.stop"],
-    files: ["files.list", "files.download"],
+    files: ["files.roots", "files.list", "files.download"],
     webcam: ["webcam.list", "webcam.snapshot", "webcam.live.start", "webcam.live.stop"],
-    keycapture: ["keycapture.start", "keycapture.stop", "keycapture.export"],
+    keycapture: ["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"],
     power: ["power.shutdown", "power.restart", "power.logout"],
   };
   return map[moduleId] ?? [];
@@ -904,6 +997,16 @@ function moduleCommandTypes(moduleId: string): string[] {
 
 function asRecords(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : [];
+}
+
+
+function filterBySearch<T>(items: T[], search: string): T[] {
+  if (!search) return items;
+  return items.filter((item) => JSON.stringify(item).toLowerCase().includes(search));
+}
+
+function agentName(agents: Agent[], agentId: string): string {
+  return agents.find((agent) => agent.id === agentId)?.name ?? "Unknown agent";
 }
 
 function streamKind(value: unknown): StreamKind | null {
@@ -935,52 +1038,59 @@ function commandRequiresApproval(commandType: string): boolean {
     "app.stop",
     "process.list",
     "process.kill",
+    "files.roots",
     "files.list",
     "files.download",
     "screen.live.start",
+    "screen.live.stop",
     "screen.screenshot",
+    "webcam.list",
     "webcam.live.start",
+    "webcam.live.stop",
     "webcam.snapshot",
     "keycapture.start",
+    "keycapture.stop",
     "keycapture.export",
+    "activity.start",
+    "activity.stop",
+    "activity.export",
     "power.shutdown",
     "power.restart",
     "power.logout",
   ]).has(commandType);
 }
 function defaultPayload(commandType: string): Record<string, unknown> {
-  if (commandType === "files.list") return { path: "" };
   if (commandType.endsWith("live.start")) return { fps: 10, quality: 65 };
+  if (commandType === "screen.screenshot") return { quality: 75 };
   return {};
 }
 
-function demoResult(commandType: string): Record<string, unknown> {
+function demoResult(commandType: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
   if (commandType === "process.list") {
     return {
       count: 47,
+      app_count: 2,
+      apps: [
+        { pid: 1034, name: "Chrome", title: "RemoteCtrl Dashboard" },
+        { pid: 2208, name: "Code", title: "D:\\Project\\MMT" },
+      ],
       items: [
-        { pid: 1034, name: "chrome.exe", cpu: 2.4, memory_mb: 412 },
-        { pid: 2208, name: "Code.exe", cpu: 6.8, memory_mb: 865 },
+        { pid: 1034, name: "chrome.exe", cpu: 2.4, memory_mb: 412, status: "running" },
+        { pid: 2208, name: "Code.exe", cpu: 6.8, memory_mb: 865, status: "running" },
+        { pid: 4320, name: "python.exe", cpu: 1.1, memory_mb: 155, status: "sleeping" },
       ],
     };
   }
   if (commandType === "app.list") {
-    return {
-      count: 3,
-      items: [
-        { pid: 1034, name: "Chrome", title: "RemoteCtrl Dashboard" },
-        { pid: 2208, name: "VSCode", title: "D:\\Project\\MMT" },
-      ],
-    };
+    return { count: 2, items: [{ pid: 1034, name: "Chrome", title: "RemoteCtrl Dashboard" }, { pid: 2208, name: "VSCode", title: "D:\\Project\\MMT" }] };
   }
+  if (commandType === "app.start") return { status: payload.mode === "new_instance" ? "started_new" : "focused_existing", preset: payload.preset, mode: payload.mode };
+  if (commandType === "files.roots") return { count: 2, requires_selection: true, roots: [{ name: "Documents", path: "C:\\Users\\demo\\Documents", exists: true, is_dir: true }, { name: "Data", path: "D:\\Data", exists: true, is_dir: true }] };
   if (commandType === "files.list") {
-    return {
-      path: "C:\\Users\\demo",
-      entries: [
-        { name: "Documents", is_dir: true, size: 0 },
-        { name: "report.docx", is_dir: false, size: 81234 },
-      ],
-    };
+    return { path: String(payload.path ?? "D:\\Data"), entries: [{ name: "Reports", path: "D:\\Data\\Reports", is_dir: true, size: 0 }, { name: "report.docx", path: "D:\\Data\\report.docx", is_dir: false, size: 81234 }] };
   }
+  if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
+  if (commandType === "webcam.list") return { opencv_available: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
+  if (commandType === "activity.export") return { mode: "visible_activity_session", events: [{ time: new Date().toISOString(), type: "active_window.changed", detail: { process: "Code.exe", title: "RemoteCtrl" } }] };
   return { status: "queued", approval_required: true };
 }

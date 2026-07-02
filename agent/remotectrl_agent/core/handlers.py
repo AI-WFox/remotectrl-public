@@ -54,6 +54,7 @@ class CommandHandlers:
             "app.stop": self.process_kill,
             "screen.screenshot": self.screen_screenshot,
             "screen.live.start": self.screen_screenshot,
+            "files.roots": self.files_roots,
             "files.list": self.files_list,
             "files.download": self.files_download,
             "webcam.list": self.webcam_list,
@@ -65,6 +66,9 @@ class CommandHandlers:
             "keycapture.start": self.keycapture_start,
             "keycapture.stop": self.keycapture_stop,
             "keycapture.export": self.keycapture_export,
+            "activity.start": self.activity_start,
+            "activity.stop": self.activity_stop,
+            "activity.export": self.activity_export,
         }
         handler = routes.get(command_type)
         if not handler:
@@ -72,6 +76,7 @@ class CommandHandlers:
         return handler(payload)
 
     def process_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        apps = self.app_list({}).get("items", [])
         try:
             import psutil
 
@@ -88,13 +93,15 @@ class CommandHandlers:
                         "memory_mb": round((mem.rss if mem else 0) / (1024 * 1024), 1),
                     }
                 )
-            return {"items": items[:250], "count": len(items), "source": "psutil"}
+            return {"items": items[:250], "apps": apps, "count": len(items), "app_count": len(apps), "source": "psutil"}
         except Exception:
             output = subprocess.check_output(["tasklist", "/fo", "csv"], text=True, errors="ignore")
             rows = list(csv.DictReader(io.StringIO(output)))
             return {
                 "items": [{"pid": row.get("PID"), "name": row.get("Image Name"), "status": "unknown"} for row in rows],
+                "apps": apps,
                 "count": len(rows),
+                "app_count": len(apps),
                 "source": "tasklist",
             }
 
@@ -119,7 +126,7 @@ class CommandHandlers:
             return {"items": [], "count": 0, "source": "unsupported"}
         ps = (
             "Get-Process | Where-Object {$_.MainWindowTitle} | "
-            "Select-Object Id,ProcessName,MainWindowTitle | ConvertTo-Json"
+            "Select-Object Id,ProcessName,MainWindowTitle,MainWindowHandle | ConvertTo-Json"
         )
         try:
             output = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps], text=True, errors="ignore")
@@ -129,8 +136,14 @@ class CommandHandlers:
             if isinstance(parsed, dict):
                 parsed = [parsed]
             items = [
-                {"pid": item["Id"], "name": item["ProcessName"], "title": item["MainWindowTitle"]}
+                {
+                    "pid": item.get("Id"),
+                    "name": item.get("ProcessName"),
+                    "title": item.get("MainWindowTitle"),
+                    "hwnd": item.get("MainWindowHandle"),
+                }
                 for item in parsed
+                if item.get("MainWindowTitle")
             ]
             return {"items": items, "count": len(items), "source": "powershell"}
         except Exception as exc:
@@ -142,8 +155,27 @@ class CommandHandlers:
             raise ValueError("path or preset is required")
         if not self._is_allowed_app(path):
             raise PermissionError("App path is not allowlisted for demo start")
+        mode = str(payload.get("mode") or "focus_existing").strip().lower()
+        if mode not in {"focus_existing", "new_instance"}:
+            raise ValueError("mode must be focus_existing or new_instance")
+        if mode == "focus_existing":
+            existing = self._find_existing_app(payload, path)
+            if existing:
+                focused = self._focus_window(existing.get("hwnd"))
+                return {
+                    "path": path,
+                    "preset": payload.get("preset"),
+                    "mode": mode,
+                    "status": "focused_existing" if focused else "existing_found",
+                    "window": existing,
+                }
         subprocess.Popen([path], close_fds=True)
-        return {"path": path, "preset": payload.get("preset"), "status": "started"}
+        return {
+            "path": path,
+            "preset": payload.get("preset"),
+            "mode": mode,
+            "status": "started_new" if mode == "new_instance" else "fallback_started",
+        }
 
     def screen_screenshot(self, payload: dict[str, Any]) -> dict[str, Any]:
         from PIL import ImageGrab
@@ -159,8 +191,27 @@ class CommandHandlers:
             "height": image.height,
         }
 
+    def files_roots(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        roots = []
+        for raw in self.config.allowed_folders:
+            path = Path(raw).expanduser()
+            roots.append(
+                {
+                    "name": path.name or str(path),
+                    "path": str(path),
+                    "exists": path.exists(),
+                    "is_dir": path.is_dir(),
+                }
+            )
+        return {"roots": roots, "count": len(roots), "requires_selection": True}
+
     def files_list(self, payload: dict[str, Any]) -> dict[str, Any]:
-        target = self._safe_path(payload.get("path") or self.config.allowed_folders[0])
+        raw_path = payload.get("path")
+        if not raw_path:
+            roots = self.files_roots({})
+            roots["entries"] = []
+            return roots
+        target = self._safe_path(raw_path)
         entries = []
         for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
             try:
@@ -194,10 +245,12 @@ class CommandHandlers:
         try:
             import cv2
         except ImportError as exc:
-            raise RuntimeError("opencv-python is required for webcam snapshot") from exc
+            raise RuntimeError("opencv-python is required on the Windows agent for webcam capture") from exc
         camera_index = int(payload.get("camera_index", 0))
         cap = cv2.VideoCapture(camera_index)
         try:
+            if not cap.isOpened():
+                raise RuntimeError(f"Camera {camera_index} is not available")
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError("Unable to read webcam frame")
@@ -205,7 +258,7 @@ class CommandHandlers:
             ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             if not ok:
                 raise RuntimeError("Unable to encode webcam frame")
-            return {"mime": "image/jpeg", "image": base64.b64encode(encoded.tobytes()).decode()}
+            return {"mime": "image/jpeg", "image": base64.b64encode(encoded.tobytes()).decode(), "camera_index": camera_index}
         finally:
             cap.release()
 
@@ -213,16 +266,24 @@ class CommandHandlers:
         try:
             import cv2
         except ImportError:
-            return {"items": [], "count": 0, "error": "opencv-python is not installed"}
+            return {"items": [], "count": 0, "opencv_available": False, "error": "opencv-python is not installed on the Windows agent"}
         items = []
+        errors = []
         for index in range(4):
             cap = cv2.VideoCapture(index)
             try:
                 if cap.isOpened():
                     items.append({"index": index, "label": f"Camera {index}"})
+            except Exception as exc:
+                errors.append(f"Camera {index}: {exc}")
             finally:
                 cap.release()
-        return {"items": items, "count": len(items)}
+        result = {"items": items, "count": len(items), "opencv_available": True}
+        if not items:
+            result["error"] = "No camera was detected on the Windows agent"
+        if errors:
+            result["diagnostics"] = errors
+        return result
 
     def power_shutdown(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return self._power(["shutdown", "/s", "/t", "5"], "shutdown")
@@ -243,6 +304,17 @@ class CommandHandlers:
 
     def keycapture_export(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return {"text": self.keycapture_provider("export"), "mode": "visible_demo_window"}
+
+    def activity_start(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        status = self.keycapture_provider("activity_start") or "started"
+        return {"status": status, "mode": "visible_activity_session"}
+
+    def activity_stop(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        status = self.keycapture_provider("activity_stop") or "stopped"
+        return {"status": status}
+
+    def activity_export(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return {"events": self.keycapture_provider("activity_export"), "mode": "visible_activity_session"}
 
     def _power(self, args: list[str], action: str) -> dict[str, Any]:
         if self.config.dry_run_power:
@@ -276,6 +348,36 @@ class CommandHandlers:
             if candidate.exists():
                 return str(candidate)
         return None
+
+    def _find_existing_app(self, payload: dict[str, Any], path: str) -> dict[str, Any] | None:
+        if platform.system() != "Windows":
+            return None
+        target_names = {Path(path).stem.lower()}
+        preset = str(payload.get("preset") or "").strip().lower()
+        if preset:
+            target_names.add(preset)
+            for candidate in APP_PRESETS.get(preset, []):
+                target_names.add(Path(candidate).stem.lower())
+        target_title = str(payload.get("title") or "").strip().lower()
+        for item in self.app_list({}).get("items", []):
+            name = str(item.get("name") or "").lower()
+            title = str(item.get("title") or "").lower()
+            if name in target_names or (target_title and target_title in title):
+                return item
+        return None
+
+    def _focus_window(self, hwnd: Any) -> bool:
+        if platform.system() != "Windows" or not hwnd:
+            return False
+        try:
+            import ctypes
+
+            handle = int(hwnd)
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(handle, 9)
+            return bool(user32.SetForegroundWindow(handle))
+        except Exception:
+            return False
 
     def _safe_path(self, raw_path: Any) -> Path:
         if not raw_path:

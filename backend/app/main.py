@@ -42,6 +42,7 @@ COMMAND_CATALOG = [
     {"type": "screen.screenshot", "label": "Capture screenshot"},
     {"type": "screen.live.start", "label": "Start screen stream"},
     {"type": "screen.live.stop", "label": "Stop screen stream"},
+    {"type": "files.roots", "label": "List allowed file roots"},
     {"type": "files.list", "label": "Browse allowed files"},
     {"type": "files.download", "label": "Download file"},
     {"type": "webcam.list", "label": "List cameras"},
@@ -54,6 +55,9 @@ COMMAND_CATALOG = [
     {"type": "keycapture.start", "label": "Start visible key-capture session"},
     {"type": "keycapture.stop", "label": "Stop visible key-capture session"},
     {"type": "keycapture.export", "label": "Export visible key-capture session"},
+    {"type": "activity.start", "label": "Start visible activity capture session"},
+    {"type": "activity.stop", "label": "Stop visible activity capture session"},
+    {"type": "activity.export", "label": "Export visible activity capture session"},
 ]
 for item in COMMAND_CATALOG:
     item["requires_approval"] = command_requires_approval(item["type"])

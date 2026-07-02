@@ -19,9 +19,16 @@ class AgentApp(tk.Tk):
         self.configure(bg="#f7f8fb")
         self.config_data = load_config()
         self.status_var = tk.StringVar(value="Not connected")
-        self.session_var = tk.StringVar(value="Screen: idle | Webcam: idle | Key Capture: idle")
+        self.session_var = tk.StringVar(value="Screen: idle | Webcam: idle | Activity: idle")
         self.keycapture_text = ""
         self.keycapture_window: tk.Toplevel | None = None
+        self.activity_events: list[dict] = []
+        self.activity_window: tk.Toplevel | None = None
+        self.activity_listbox: tk.Listbox | None = None
+        self.activity_text: tk.Text | None = None
+        self.activity_poll_job: str | None = None
+        self.activity_last_window = ""
+        self.activity_mouse_listener = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.handlers = CommandHandlers(self.config_data, self.keycapture_provider)
         self.client = AgentClient(self.config_data, self.handlers, self.set_status_threadsafe, self.request_approval_threadsafe)
@@ -74,7 +81,8 @@ class AgentApp(tk.Tk):
         for text in [
             "Local approval required by default for every remote action",
             "Power commands default to dry-run mode",
-            "Key capture is visible and limited to the demo typing window",
+            "Activity capture is visible and session-scoped",
+            "Typed text is only captured inside the visible demo window",
         ]:
             ttk.Label(safety, text=f"[ok] {text}", style="Card.TLabel").pack(anchor="w", pady=2)
 
@@ -155,12 +163,9 @@ class AgentApp(tk.Tk):
             elif kind == "approval":
                 message, response = payload
                 command_type = message.get("command_type", "remote action")
-                approved = messagebox.askyesno(
-                    "RemoteCtrl Approval",
-                    f"Allow remote action?\n\n{command_type}\n\nThis action will be audited by the gateway.",
-                )
-                response.put(approved)
-                self.append_log(f"Approval {'granted' if approved else 'denied'}: {command_type}")
+                decision = self.show_approval_dialog(message)
+                response.put(decision)
+                self.append_log(f"Approval {'granted' if decision.get('approved') else 'denied'}: {command_type}")
         self.refresh_session_status()
         self.after(200, self.process_ui_queue)
 
@@ -209,8 +214,8 @@ class AgentApp(tk.Tk):
     def refresh_session_status(self) -> None:
         screen = "running" if "screen" in self.client.active_streams else "idle"
         webcam = "running" if "webcam" in self.client.active_streams else "idle"
-        keycapture = "running" if self.keycapture_window and self.keycapture_window.winfo_exists() else "idle"
-        self.session_var.set(f"Screen: {screen} | Webcam: {webcam} | Key Capture: {keycapture}")
+        activity = "running" if self.activity_window and self.activity_window.winfo_exists() else "idle"
+        self.session_var.set(f"Screen: {screen} | Webcam: {webcam} | Activity: {activity}")
     def identity_text(self) -> str:
         if not self.config_data.agent_id:
             return "Not enrolled yet"
@@ -233,6 +238,15 @@ class AgentApp(tk.Tk):
             return "stopped"
         if action == "export":
             return self.keycapture_text
+        if action == "activity_start":
+            already_running = self.activity_window is not None and self.activity_window.winfo_exists()
+            self.after(0, self.open_activity_window)
+            return "already_running" if already_running else "started"
+        if action == "activity_stop":
+            self.after(0, self.close_activity_window)
+            return "stopped"
+        if action == "activity_export":
+            return list(self.activity_events)
         raise ValueError(action)
 
     def open_keycapture_window(self) -> None:
@@ -261,6 +275,111 @@ class AgentApp(tk.Tk):
             self.keycapture_window.destroy()
         self.client.keycapture_active = False
         self.refresh_session_status()
+
+
+    def open_activity_window(self) -> None:
+        if self.activity_window and self.activity_window.winfo_exists():
+            self.activity_window.lift()
+            return
+        win = tk.Toplevel(self)
+        win.title("RemoteCtrl Visible Activity Capture")
+        win.geometry("680x460")
+        ttk.Label(win, text="Visible activity capture session", font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=16, pady=(16, 4))
+        ttk.Label(
+            win,
+            text="This visible session records active window changes, app/process observations, clicks, and text typed in this window only.",
+            wraplength=630,
+        ).pack(anchor="w", padx=16)
+        self.activity_listbox = tk.Listbox(win, height=10, borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb")
+        self.activity_listbox.pack(fill="both", expand=True, padx=16, pady=(12, 8))
+        ttk.Label(win, text="Visible text capture area", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
+        self.activity_text = tk.Text(win, height=5)
+        self.activity_text.pack(fill="x", padx=16, pady=(6, 16))
+        self.activity_text.bind("<KeyRelease>", self.sync_activity_text)
+        win.protocol("WM_DELETE_WINDOW", self.close_activity_window)
+        self.activity_window = win
+        self.client.activity_active = True
+        self.activity_last_window = ""
+        self._append_activity_event("session.started", {})
+        self.start_mouse_listener()
+        self.poll_activity_window()
+        self.refresh_session_status()
+
+    def close_activity_window(self) -> None:
+        if self.activity_poll_job:
+            try:
+                self.after_cancel(self.activity_poll_job)
+            except Exception:
+                pass
+            self.activity_poll_job = None
+        if self.activity_mouse_listener:
+            try:
+                self.activity_mouse_listener.stop()
+            except Exception:
+                pass
+            self.activity_mouse_listener = None
+        self._append_activity_event("session.stopped", {})
+        if self.activity_window and self.activity_window.winfo_exists():
+            self.activity_window.destroy()
+        self.activity_window = None
+        self.client.activity_active = False
+        self.refresh_session_status()
+
+    def sync_activity_text(self, _event=None) -> None:
+        if not self.activity_text:
+            return
+        text = self.activity_text.get("1.0", "end-1c")
+        self._append_activity_event("visible_text.updated", {"characters": len(text)})
+
+    def poll_activity_window(self) -> None:
+        if not self.activity_window or not self.activity_window.winfo_exists():
+            return
+        current = self.current_active_window()
+        label = f"{current.get('process', 'unknown')} | {current.get('title', '')}"
+        if label and label != self.activity_last_window:
+            self.activity_last_window = label
+            self._append_activity_event("active_window.changed", current)
+        self.activity_poll_job = self.after(1000, self.poll_activity_window)
+
+    def current_active_window(self) -> dict:
+        try:
+            import ctypes
+            import psutil
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            length = user32.GetWindowTextLengthW(hwnd)
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process_name = psutil.Process(pid.value).name() if pid.value else "unknown"
+            return {"pid": int(pid.value), "process": process_name, "title": buffer.value}
+        except Exception as exc:
+            return {"process": "unknown", "title": "unavailable", "error": str(exc)}
+
+    def start_mouse_listener(self) -> None:
+        try:
+            from pynput import mouse
+        except Exception as exc:
+            self._append_activity_event("mouse.listener_unavailable", {"error": str(exc)})
+            return
+
+        def on_click(x, y, button, pressed):
+            if pressed:
+                self.after(0, lambda: self._append_activity_event("mouse.clicked", {"x": x, "y": y, "button": str(button), "window": self.current_active_window()}))
+
+        self.activity_mouse_listener = mouse.Listener(on_click=on_click)
+        self.activity_mouse_listener.daemon = True
+        self.activity_mouse_listener.start()
+
+    def _append_activity_event(self, event_type: str, detail: dict) -> None:
+        event = {"time": datetime.now().isoformat(timespec="seconds"), "type": event_type, "detail": detail}
+        self.activity_events.append(event)
+        self.activity_events = self.activity_events[-500:]
+        if self.activity_listbox and self.activity_listbox.winfo_exists():
+            self.activity_listbox.insert(tk.END, f"{event['time']}  {event_type}  {detail}")
+            self.activity_listbox.see(tk.END)
 
 
 def main() -> None:

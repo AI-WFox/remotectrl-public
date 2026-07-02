@@ -92,3 +92,41 @@ def test_delete_online_agent_closes_and_removes_record(tmp_path):
         assert deleted.status_code == 200
         assert deleted.json()["deleted"] is True
         assert repo.get_agent(enrolled["agent_id"]) is None
+
+
+def test_command_routes_only_to_selected_agent_when_two_agents_online(tmp_path):
+    settings.database_path = tmp_path / "ws-two-agents.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("ws-two", reusable=True)
+
+    client = TestClient(app)
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    first = client.post(
+        "/api/agents/enroll",
+        json={"enrollment_token": enrollment_token, "name": "Agent A", "hostname": "host-a", "os": "Windows"},
+    ).json()
+    second = client.post(
+        "/api/agents/enroll",
+        json={"enrollment_token": enrollment_token, "name": "Agent B", "hostname": "host-b", "os": "Windows"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/agent?token={first['agent_token']}") as ws_a:
+        ws_a.receive_json()
+        with client.websocket_connect(f"/ws/agent?token={second['agent_token']}") as ws_b:
+            ws_b.receive_json()
+            response = client.post(
+                "/api/commands",
+                headers=headers,
+                json={"agent_id": second["agent_id"], "type": "files.roots", "payload": {}},
+            )
+            assert response.status_code == 200
+            routed = ws_b.receive_json()
+            assert routed["agent_id"] == second["agent_id"]
+            assert routed["command_type"] == "files.roots"
+            ws_a.close()

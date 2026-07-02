@@ -4,4 +4,4 @@ psutil==6.1.1
 pillow==11.1.0
 opencv-python==4.10.0.84
 pyinstaller==6.11.1
-
+pynput==1.7.7

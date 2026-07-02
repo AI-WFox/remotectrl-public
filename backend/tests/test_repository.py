@@ -18,4 +18,8 @@ def test_command_sensitive_approval(tmp_path: Path):
     command = repo.create_command(agent["id"], "process.list", {}, "a@b.test")
     assert command["requires_approval"] is True
     command = repo.create_command(agent["id"], "screen.live.stop", {}, "a@b.test")
-    assert command["requires_approval"] is False
+    assert command["requires_approval"] is True
+    command = repo.create_command(agent["id"], "files.roots", {}, "a@b.test")
+    assert command["requires_approval"] is True
+    command = repo.create_command(agent["id"], "activity.stop", {}, "a@b.test")
+    assert command["requires_approval"] is True

@@ -38,6 +38,7 @@ class AgentClient:
         self.active_streams: dict[str, tuple[threading.Event, threading.Thread]] = {}
         self.session_approvals: set[str] = set()
         self.keycapture_active = False
+        self.activity_active = False
         self.thread: threading.Thread | None = None
 
     def enroll(self, enrollment_token: str) -> None:
@@ -106,6 +107,7 @@ class AgentClient:
             self._stop_all_streams()
             self.session_approvals.clear()
             self.keycapture_active = False
+            self.activity_active = False
             ws.close()
 
     def _handle_message(self, ws, message: dict) -> None:
@@ -118,11 +120,13 @@ class AgentClient:
         if command_type in {"screen.live.start", "webcam.live.start"} and self._stream_active(command_type):
             self._send(ws, result(command_id, agent_id, True, payload={"status": "already_running", "stream": self._stream_name(command_type)}))
             return
-        if command_type == "keycapture.start" and self.keycapture_active:
-            payload_result = self.handlers.handle(command_type, payload)
-            payload_result["status"] = "already_running"
-            self._send(ws, result(command_id, agent_id, True, payload=payload_result))
-            return
+        if command_type in {"keycapture.start", "activity.start"}:
+            already_active = self.keycapture_active if command_type == "keycapture.start" else self.activity_active
+            if already_active:
+                payload_result = self.handlers.handle(command_type, payload)
+                payload_result["status"] = "already_running"
+                self._send(ws, result(command_id, agent_id, True, payload=payload_result))
+                return
         requires_approval = bool(message.get("requires_approval"))
         if requires_approval:
             decision = self._approval_decision(message)
@@ -152,6 +156,10 @@ class AgentClient:
                 self.keycapture_active = True
             elif command_type == "keycapture.stop":
                 self.keycapture_active = False
+            elif command_type == "activity.start" and payload_result.get("status") in {"started", "already_running"}:
+                self.activity_active = True
+            elif command_type == "activity.stop":
+                self.activity_active = False
             self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
@@ -161,16 +169,20 @@ class AgentClient:
         self.session_approvals.clear()
 
     def _approval_decision(self, message: dict) -> dict[str, Any]:
-        family = self._approval_family(message.get("command_type", ""))
-        if family in self.session_approvals:
+        command_type = message.get("command_type", "")
+        stop_commands = {"screen.live.stop", "webcam.live.stop", "keycapture.stop", "activity.stop"}
+        family = self._approval_family(command_type)
+        if command_type not in stop_commands and family in self.session_approvals:
             return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
         raw = self.request_approval(message)
         if isinstance(raw, bool):
             return {"approved": raw, "approval_mode": "prompt_once", "policy_scope": "single_command"}
         approved = bool(raw.get("approved"))
         policy_scope = str(raw.get("policy_scope") or "single_command")
-        if approved and policy_scope == "current_session":
+        if approved and policy_scope == "current_session" and command_type not in stop_commands:
             self.session_approvals.add(family)
+        if command_type in stop_commands:
+            policy_scope = "single_command"
         return {
             "approved": approved,
             "approval_mode": str(raw.get("approval_mode") or "prompt_once"),
@@ -184,6 +196,8 @@ class AgentClient:
             return "webcam"
         if command_type.startswith("keycapture."):
             return "keycapture"
+        if command_type.startswith("activity."):
+            return "activity"
         if command_type.startswith("files."):
             return "files"
         if command_type.startswith("process."):
