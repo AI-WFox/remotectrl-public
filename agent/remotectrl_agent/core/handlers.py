@@ -5,6 +5,7 @@ import csv
 import io
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -321,7 +322,7 @@ class CommandHandlers:
         try:
             import cv2
         except ImportError as exc:
-            raise RuntimeError("opencv-python is required on the Windows agent for webcam capture") from exc
+            raise RuntimeError("OpenCV is unavailable in this Agent. Install agent/requirements.txt or run the latest packaged Agent EXE with OpenCV bundled.") from exc
         camera_index = int(payload.get("camera_index", 0))
         cap = cv2.VideoCapture(camera_index)
         try:
@@ -339,10 +340,18 @@ class CommandHandlers:
             cap.release()
 
     def webcam_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        packaged = bool(getattr(sys, "frozen", False))
         try:
             import cv2
-        except ImportError:
-            return {"items": [], "count": 0, "opencv_available": False, "error": "opencv-python is not installed on the Windows agent"}
+        except ImportError as exc:
+            return {
+                "items": [],
+                "count": 0,
+                "opencv_available": False,
+                "agent_packaged": packaged,
+                "error": "OpenCV is unavailable in this Agent. Install agent/requirements.txt or run the latest packaged Agent EXE with OpenCV bundled.",
+                "import_error": str(exc),
+            }
         items = []
         errors = []
         for index in range(4):
@@ -354,7 +363,7 @@ class CommandHandlers:
                 errors.append(f"Camera {index}: {exc}")
             finally:
                 cap.release()
-        result = {"items": items, "count": len(items), "opencv_available": True}
+        result = {"items": items, "count": len(items), "opencv_available": True, "agent_packaged": packaged, "cv2_version": getattr(cv2, "__version__", "unknown")}
         if not items:
             result["error"] = "No camera was detected on the Windows agent"
         if errors:

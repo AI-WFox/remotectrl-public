@@ -269,7 +269,9 @@ def test_webcam_list_reports_missing_opencv(monkeypatch):
     result = handlers.webcam_list({})
 
     assert result["opencv_available"] is False
-    assert "opencv-python" in result["error"]
+    assert result["agent_packaged"] is False
+    assert "OpenCV is unavailable" in result["error"]
+    assert "missing cv2" in result["import_error"]
 
 
 def test_stop_commands_ignore_session_cached_approval():

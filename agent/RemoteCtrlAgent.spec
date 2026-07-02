@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+cv2_datas = collect_data_files("cv2")
+cv2_binaries = collect_dynamic_libs("cv2")
 
 a = Analysis(
     ['D:\\Project\\MMT\\agent\\remotectrl_agent\\__main__.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=cv2_binaries,
+    datas=cv2_datas,
+    hiddenimports=["cv2"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

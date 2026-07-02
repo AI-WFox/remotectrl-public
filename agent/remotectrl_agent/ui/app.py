@@ -25,10 +25,12 @@ class AgentApp(tk.Tk):
         self.activity_events: list[dict] = []
         self.activity_window: tk.Toplevel | None = None
         self.activity_listbox: tk.Listbox | None = None
-        self.activity_text: tk.Text | None = None
         self.activity_poll_job: str | None = None
         self.activity_last_window = ""
         self.activity_mouse_listener = None
+        self.activity_keyboard_listener = None
+        self.activity_pressed_modifiers: set[str] = set()
+        self.activity_text_buffer = ""
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.handlers = CommandHandlers(self.config_data, self.keycapture_provider)
         self.client = AgentClient(self.config_data, self.handlers, self.set_status_threadsafe, self.request_approval_threadsafe)
@@ -65,7 +67,7 @@ class AgentApp(tk.Tk):
         ttk.Button(controls, text="Enroll", style="Accent.TButton", command=self.enroll).pack(side="left")
         ttk.Button(controls, text="Connect", command=self.connect).pack(side="left", padx=8)
         ttk.Button(controls, text="Pause / Resume", command=self.toggle_pause).pack(side="left", padx=8)
-        ttk.Button(controls, text="Add Allowed Folder", command=self.add_folder).pack(side="left", padx=8)
+        ttk.Button(controls, text="Allow folder for Web Files", command=self.add_folder).pack(side="left", padx=8)
         ttk.Button(controls, text="Reset session approvals", command=self.reset_session_approvals).pack(side="left", padx=8)
 
         status_card = ttk.Frame(outer, style="Card.TFrame", padding=20)
@@ -81,14 +83,16 @@ class AgentApp(tk.Tk):
         for text in [
             "Local approval required by default for every remote action",
             "Power commands default to dry-run mode",
-            "Activity capture is visible and session-scoped",
-            "Typed text is only captured inside the visible demo window",
+            "Activity capture is visible, approved, and session-scoped",
+            "Allowed folders are the only places Web Files can browse or download",
         ]:
             ttk.Label(safety, text=f"[ok] {text}", style="Card.TLabel").pack(anchor="w", pady=2)
 
-        ttk.Label(status_card, text="Allowed folders", style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(status_card, text="Allowed folders for Web Files", style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(status_card, text="The dashboard can browse/download only these folders, after local approval.", style="Card.TLabel").pack(anchor="w", pady=(4, 0))
         self.folder_list = tk.Listbox(status_card, height=7, borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb")
-        self.folder_list.pack(fill="x", pady=(8, 12))
+        self.folder_list.pack(fill="x", pady=(8, 8))
+        ttk.Button(status_card, text="Remove selected allowed folder", command=self.remove_selected_folder).pack(anchor="w", pady=(0, 12))
         ttk.Label(status_card, text="Agent log", style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w")
         self.log_box = tk.Text(status_card, height=6, borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb")
         self.log_box.configure(state="disabled")
@@ -132,11 +136,24 @@ class AgentApp(tk.Tk):
             self.client.start()
 
     def add_folder(self) -> None:
-        folder = filedialog.askdirectory()
+        folder = filedialog.askdirectory(title="Allow this folder for Web Files")
         if folder and folder not in self.config_data.allowed_folders:
             self.config_data.allowed_folders.append(folder)
             save_config(self.config_data)
             self.refresh_folders()
+            self.append_log(f"Allowed folder added: {folder}")
+
+    def remove_selected_folder(self) -> None:
+        selection = list(self.folder_list.curselection())
+        if not selection:
+            messagebox.showinfo("No folder selected", "Select a folder to remove from Web Files access.")
+            return
+        index = selection[0]
+        if 0 <= index < len(self.config_data.allowed_folders):
+            removed = self.config_data.allowed_folders.pop(index)
+            save_config(self.config_data)
+            self.refresh_folders()
+            self.append_log(f"Allowed folder removed: {removed}")
 
     def refresh_folders(self) -> None:
         self.folder_list.delete(0, tk.END)
@@ -345,26 +362,27 @@ class AgentApp(tk.Tk):
             self.activity_window.lift()
             return
         win = tk.Toplevel(self)
-        win.title("RemoteCtrl Visible Activity Capture")
-        win.geometry("680x460")
-        ttk.Label(win, text="Visible activity capture session", font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=16, pady=(16, 4))
+        win.title("RemoteCtrl Activity Capture Active")
+        win.geometry("700x420")
+        win.attributes("-topmost", True)
+        ttk.Label(win, text="Activity Capture Active", font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=16, pady=(16, 4))
         ttk.Label(
             win,
-            text="This visible session records active window changes, app/process observations, clicks, and text typed in this window only.",
-            wraplength=630,
+            text="Approved visible session: records active window changes, mouse clicks, keyboard shortcuts, and typed text until stopped.",
+            wraplength=650,
         ).pack(anchor="w", padx=16)
-        self.activity_listbox = tk.Listbox(win, height=10, borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb")
-        self.activity_listbox.pack(fill="both", expand=True, padx=16, pady=(12, 8))
-        ttk.Label(win, text="Visible text capture area", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
-        self.activity_text = tk.Text(win, height=5)
-        self.activity_text.pack(fill="x", padx=16, pady=(6, 16))
-        self.activity_text.bind("<KeyRelease>", self.sync_activity_text)
+        ttk.Button(win, text="Stop local capture now", command=self.close_activity_window).pack(anchor="w", padx=16, pady=(10, 6))
+        self.activity_listbox = tk.Listbox(win, height=13, borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb")
+        self.activity_listbox.pack(fill="both", expand=True, padx=16, pady=(8, 16))
         win.protocol("WM_DELETE_WINDOW", self.close_activity_window)
         self.activity_window = win
         self.client.activity_active = True
         self.activity_last_window = ""
+        self.activity_text_buffer = ""
+        self.activity_pressed_modifiers.clear()
         self._append_activity_event("session.started", {})
         self.start_mouse_listener()
+        self.start_keyboard_listener()
         self.poll_activity_window()
         self.refresh_session_status()
 
@@ -381,6 +399,13 @@ class AgentApp(tk.Tk):
             except Exception:
                 pass
             self.activity_mouse_listener = None
+        if self.activity_keyboard_listener:
+            try:
+                self.activity_keyboard_listener.stop()
+            except Exception:
+                pass
+            self.activity_keyboard_listener = None
+        self.activity_pressed_modifiers.clear()
         self._append_activity_event("session.stopped", {})
         if self.activity_window and self.activity_window.winfo_exists():
             self.activity_window.destroy()
@@ -389,10 +414,8 @@ class AgentApp(tk.Tk):
         self.refresh_session_status()
 
     def sync_activity_text(self, _event=None) -> None:
-        if not self.activity_text:
-            return
-        text = self.activity_text.get("1.0", "end-1c")
-        self._append_activity_event("visible_text.updated", {"characters": len(text)})
+        # Kept for backward compatibility with older queued UI events. Activity capture no longer uses a demo text box.
+        return
 
     def poll_activity_window(self) -> None:
         if not self.activity_window or not self.activity_window.winfo_exists():
@@ -436,10 +459,76 @@ class AgentApp(tk.Tk):
         self.activity_mouse_listener.daemon = True
         self.activity_mouse_listener.start()
 
+    def start_keyboard_listener(self) -> None:
+        try:
+            from pynput import keyboard
+        except Exception as exc:
+            self._append_activity_event("keyboard.listener_unavailable", {"error": str(exc)})
+            return
+
+        modifier_names = {
+            keyboard.Key.ctrl_l: "Ctrl",
+            keyboard.Key.ctrl_r: "Ctrl",
+            keyboard.Key.alt_l: "Alt",
+            keyboard.Key.alt_r: "Alt",
+            keyboard.Key.shift_l: "Shift",
+            keyboard.Key.shift_r: "Shift",
+            keyboard.Key.cmd: "Win",
+            keyboard.Key.cmd_l: "Win",
+            keyboard.Key.cmd_r: "Win",
+        }
+
+        def display_key(key) -> str:
+            char = getattr(key, "char", None)
+            if char:
+                if len(char) == 1 and ord(char) < 32 and "Ctrl" in self.activity_pressed_modifiers:
+                    return chr(ord(char) + 96).upper()
+                return char.upper() if "Shift" in self.activity_pressed_modifiers and len(char) == 1 else char
+            name = getattr(key, "name", None) or str(key).replace("Key.", "")
+            return str(name).replace("_", " ").title()
+
+        def append_text(value: str) -> None:
+            self.activity_text_buffer += value
+            self._append_activity_event("keyboard.text", {"text": self.activity_text_buffer[-160:], "window": self.current_active_window()})
+
+        def on_press(key):
+            modifier = modifier_names.get(key)
+            if modifier:
+                self.activity_pressed_modifiers.add(modifier)
+                return
+            label = display_key(key)
+            if self.activity_pressed_modifiers:
+                combo = " + ".join(sorted(self.activity_pressed_modifiers) + [label.upper() if len(label) == 1 else label])
+                self.after(0, lambda: self._append_activity_event("keyboard.shortcut", {"keys": combo, "window": self.current_active_window()}))
+                return
+            if len(label) == 1 and ord(label) >= 32:
+                self.after(0, lambda value=label: append_text(value))
+                return
+            if label == "Space":
+                self.after(0, lambda: append_text(" "))
+                return
+            if label == "Backspace":
+                self.activity_text_buffer = self.activity_text_buffer[:-1]
+                self.after(0, lambda: self._append_activity_event("keyboard.text", {"text": self.activity_text_buffer[-160:], "key": "Backspace", "window": self.current_active_window()}))
+                return
+            if label == "Enter":
+                self.after(0, lambda: self._append_activity_event("keyboard.key", {"key": "Enter", "text": self.activity_text_buffer[-160:], "window": self.current_active_window()}))
+                return
+            self.after(0, lambda: self._append_activity_event("keyboard.key", {"key": label, "window": self.current_active_window()}))
+
+        def on_release(key):
+            modifier = modifier_names.get(key)
+            if modifier:
+                self.activity_pressed_modifiers.discard(modifier)
+
+        self.activity_keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self.activity_keyboard_listener.daemon = True
+        self.activity_keyboard_listener.start()
+
     def _append_activity_event(self, event_type: str, detail: dict) -> None:
         event = {"time": datetime.now().isoformat(timespec="seconds"), "type": event_type, "detail": detail}
         self.activity_events.append(event)
-        self.activity_events = self.activity_events[-500:]
+        self.activity_events = self.activity_events[-1000:]
         if self.activity_listbox and self.activity_listbox.winfo_exists():
             self.activity_listbox.insert(tk.END, f"{event['time']}  {event_type}  {detail}")
             self.activity_listbox.see(tk.END)
