@@ -1,16 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_all
 
-cv2_datas = collect_data_files("cv2")
-cv2_binaries = collect_dynamic_libs("cv2")
+cv2_datas, cv2_binaries, cv2_hiddenimports = collect_all("cv2")
+numpy_datas, numpy_binaries, numpy_hiddenimports = collect_all("numpy")
+
+hiddenimports = sorted(set(cv2_hiddenimports + numpy_hiddenimports + [
+    "cv2",
+    "numpy",
+    "numpy.core",
+    "numpy.core.multiarray",
+    "numpy._core",
+    "numpy._core.multiarray",
+]))
 
 a = Analysis(
-    ['D:\\Project\\MMT\\agent\\remotectrl_agent\\__main__.py'],
+    [r'D:\Project\MMT\agent\remotectrl_agent\__main__.py'],
     pathex=[],
-    binaries=cv2_binaries,
-    datas=cv2_datas,
-    hiddenimports=["cv2"],
+    binaries=cv2_binaries + numpy_binaries,
+    datas=cv2_datas + numpy_datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
