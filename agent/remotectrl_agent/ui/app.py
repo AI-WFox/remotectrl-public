@@ -219,13 +219,35 @@ class AgentApp(tk.Tk):
         parent_height = max(self.winfo_height(), 1)
         child_width = win.winfo_width()
         child_height = win.winfo_height()
-        if parent_width <= 1 or parent_height <= 1:
+        parent_unavailable = self.state() in {"withdrawn", "iconic"} or parent_width <= 1 or parent_height <= 1
+        if parent_unavailable:
             x = max(0, (win.winfo_screenwidth() - child_width) // 2)
             y = max(0, (win.winfo_screenheight() - child_height) // 2)
         else:
             x = self.winfo_rootx() + max(0, (parent_width - child_width) // 2)
             y = self.winfo_rooty() + max(0, (parent_height - child_height) // 2)
         win.geometry(f"+{x}+{y}")
+
+    def raise_approval_window(self, win: tk.Toplevel, keep_topmost: bool = True) -> None:
+        def raise_once() -> None:
+            try:
+                if not win.winfo_exists():
+                    return
+                win.deiconify()
+                win.state("normal")
+                win.lift()
+                if keep_topmost:
+                    win.attributes("-topmost", True)
+                win.focus_force()
+                win.bell()
+            except tk.TclError:
+                pass
+
+        raise_once()
+        for delay in (120, 350, 800):
+            win.after(delay, raise_once)
+        if keep_topmost:
+            win.after(1800, lambda: win.winfo_exists() and win.attributes("-topmost", False))
 
     def approval_request_key(self, message: dict) -> str:
         payload = message.get("payload") or {}
@@ -305,8 +327,7 @@ class AgentApp(tk.Tk):
         ttk.Button(buttons, text="Allow this action for this session", command=lambda: choose(True, "current_session")).pack(side="left", padx=8)
         win.protocol("WM_DELETE_WINDOW", lambda: choose(False, "single_command"))
         self.center_child_window(win)
-        win.after(50, lambda: (win.lift(), win.focus_force()))
-        win.after(700, lambda: win.attributes("-topmost", False))
+        self.raise_approval_window(win)
         win.after(1000, tick)
 
     def approval_summary(self, payload: dict) -> str:
