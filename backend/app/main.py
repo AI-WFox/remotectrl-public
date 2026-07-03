@@ -52,6 +52,8 @@ COMMAND_CATALOG = [
     {"type": "power.shutdown", "label": "Shutdown endpoint"},
     {"type": "power.restart", "label": "Restart endpoint"},
     {"type": "power.logout", "label": "Logout endpoint"},
+    {"type": "power.sleep", "label": "Sleep endpoint"},
+    {"type": "power.status", "label": "Read power status"},
     {"type": "keycapture.start", "label": "Start visible key-capture session"},
     {"type": "keycapture.stop", "label": "Stop visible key-capture session"},
     {"type": "keycapture.export", "label": "Export visible key-capture session"},

@@ -34,6 +34,8 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert capabilities["keycapture.stop"]["requires_approval"] is True
     assert capabilities["activity.start"]["requires_approval"] is True
     assert capabilities["activity.stop"]["requires_approval"] is True
+    assert capabilities["power.sleep"]["requires_approval"] is True
+    assert capabilities["power.status"]["requires_approval"] is True
 
     enrolled = client.post(
         "/api/agents/enroll",

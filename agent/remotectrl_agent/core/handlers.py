@@ -6,6 +6,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,8 @@ class CommandHandlers:
             "power.shutdown": self.power_shutdown,
             "power.restart": self.power_restart,
             "power.logout": self.power_logout,
+            "power.sleep": self.power_sleep,
+            "power.status": self.power_status,
             "keycapture.start": self.keycapture_start,
             "keycapture.stop": self.keycapture_stop,
             "keycapture.export": self.keycapture_export,
@@ -153,16 +156,19 @@ class CommandHandlers:
             parsed = json.loads(output) if output.strip() else []
             if isinstance(parsed, dict):
                 parsed = [parsed]
-            items = [
-                {
-                    "pid": item.get("Id"),
-                    "name": item.get("ProcessName"),
-                    "title": item.get("MainWindowTitle"),
-                    "hwnd": item.get("MainWindowHandle"),
-                }
-                for item in parsed
-                if item.get("MainWindowTitle")
-            ]
+            items = []
+            for item in parsed:
+                title = str(item.get("MainWindowTitle") or "")
+                name = str(item.get("ProcessName") or "")
+                if title and not self._is_agent_window(name, title):
+                    items.append(
+                        {
+                            "pid": item.get("Id"),
+                            "name": name,
+                            "title": title,
+                            "hwnd": item.get("MainWindowHandle"),
+                        }
+                    )
             return {"items": items, "count": len(items), "source": "powershell"}
         except Exception as exc:
             return {"items": [], "count": 0, "source": "powershell", "error": str(exc)}
@@ -218,6 +224,8 @@ class CommandHandlers:
                     process_name = psutil.Process(pid.value).name()
                 except Exception:
                     process_name = "unknown"
+            if self._is_agent_window(process_name, title):
+                return True
             items.append({"pid": int(pid.value), "name": process_name, "title": title, "hwnd": int(hwnd)})
             return True
 
@@ -258,15 +266,22 @@ class CommandHandlers:
         from PIL import ImageGrab
 
         quality = min(max(int(payload.get("quality", 75)), 35), 90)
-        image = ImageGrab.grab()
-        buf = io.BytesIO()
-        image.save(buf, format="JPEG", quality=quality)
-        return {
-            "mime": "image/jpeg",
-            "image": base64.b64encode(buf.getvalue()).decode(),
-            "width": image.width,
-            "height": image.height,
-        }
+        restore_after = not payload.get("_screen_hidden")
+        if restore_after:
+            self.keycapture_provider("screen_capture_hide")
+        try:
+            image = ImageGrab.grab()
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=quality)
+            return {
+                "mime": "image/jpeg",
+                "image": base64.b64encode(buf.getvalue()).decode(),
+                "width": image.width,
+                "height": image.height,
+            }
+        finally:
+            if restore_after:
+                self.keycapture_provider("screen_capture_restore")
 
     def files_roots(self, _payload: dict[str, Any]) -> dict[str, Any]:
         roots = []
@@ -348,8 +363,10 @@ class CommandHandlers:
                 "items": [],
                 "count": 0,
                 "opencv_available": False,
+                "cv2_available": False,
                 "agent_packaged": packaged,
-                "error": "OpenCV is unavailable in this Agent. Install agent/requirements.txt or run the latest packaged Agent EXE with OpenCV bundled.",
+                "error": "Packaged Agent EXE is missing OpenCV. Download and run the latest RemoteCtrlAgent.exe build.",
+                "packaging_error": "cv2 import failed inside packaged EXE" if packaged else "Source-run Agent is missing cv2; packaged EXE includes it.",
                 "import_error": str(exc),
             }
         items = []
@@ -363,7 +380,7 @@ class CommandHandlers:
                 errors.append(f"Camera {index}: {exc}")
             finally:
                 cap.release()
-        result = {"items": items, "count": len(items), "opencv_available": True, "agent_packaged": packaged, "cv2_version": getattr(cv2, "__version__", "unknown")}
+        result = {"items": items, "count": len(items), "opencv_available": True, "cv2_available": True, "agent_packaged": packaged, "cv2_version": getattr(cv2, "__version__", "unknown"), "packaging_error": None}
         if not items:
             result["error"] = "No camera was detected on the Windows agent"
         if errors:
@@ -378,6 +395,44 @@ class CommandHandlers:
 
     def power_logout(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return self._power(["shutdown", "/l"], "logout")
+
+    def power_sleep(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return self._power(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], "sleep")
+
+    def power_status(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        status: dict[str, Any] = {
+            "action": "status",
+            "status": "ok",
+            "dry_run_power": self.config.dry_run_power,
+            "supported_actions": ["shutdown", "restart", "logout", "sleep"],
+            "system_uptime_seconds": None,
+            "battery_percent": None,
+            "battery_plugged": None,
+            "temperature_celsius": None,
+        }
+        try:
+            import psutil
+
+            status["system_uptime_seconds"] = max(0, int(time.time() - psutil.boot_time()))
+            battery = psutil.sensors_battery()
+            if battery is not None:
+                status["battery_percent"] = round(float(battery.percent), 1)
+                status["battery_plugged"] = bool(battery.power_plugged)
+            try:
+                temperatures = psutil.sensors_temperatures()
+            except Exception:
+                temperatures = {}
+            for sensors in temperatures.values():
+                for sensor in sensors:
+                    current = getattr(sensor, "current", None)
+                    if current is not None:
+                        status["temperature_celsius"] = round(float(current), 1)
+                        raise StopIteration
+        except StopIteration:
+            pass
+        except Exception as exc:
+            status["diagnostic_error"] = str(exc)
+        return status
 
     def keycapture_start(self, _payload: dict[str, Any]) -> dict[str, Any]:
         status = self.keycapture_provider("start") or "started"
@@ -403,9 +458,9 @@ class CommandHandlers:
 
     def _power(self, args: list[str], action: str) -> dict[str, Any]:
         if self.config.dry_run_power:
-            return {"action": action, "status": "dry_run", "message": "Set dry_run_power=false to execute."}
+            return {"action": action, "status": "dry_run", "message": "Real power actions are disabled on the Agent."}
         subprocess.Popen(args)
-        return {"action": action, "status": "requested"}
+        return {"action": action, "status": "requested", "message": f"{action} requested on the Agent."}
 
     def _resolve_app_path(self, payload: dict[str, Any]) -> str:
         preset = str(payload.get("preset", "")).strip().lower()
@@ -461,6 +516,17 @@ class CommandHandlers:
         if normalized.endswith(".exe"):
             normalized = normalized[:-4]
         return normalized
+
+    def _is_agent_window(self, process_name: str, title: str) -> bool:
+        process = process_name.strip().lower()
+        window_title = title.strip().lower()
+        agent_titles = (
+            "remotectrl agent",
+            "remotectrl approval",
+            "remotectrl activity capture",
+            "remotectrl visible key capture",
+        )
+        return process in {"remotectrlagent.exe", "remotectrlagent"} or window_title.startswith(agent_titles)
 
     def _focus_window(self, hwnd: Any) -> bool:
         if os.name != "nt" or not hwnd:

@@ -5,7 +5,10 @@ import {
   Camera,
   CheckCircle2,
   ChevronRight,
+  File as FileIcon,
   FileDown,
+  Folder,
+  Info,
   KeyRound,
   Laptop,
   LogOut,
@@ -31,7 +34,7 @@ const modules = [
   { id: "files", label: "Files", icon: FileDown, command: "files.roots", safe: false },
   { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.list", safe: false },
   { id: "keycapture", label: "Activity Capture", icon: KeyRound, command: "activity.start", safe: false },
-  { id: "power", label: "Power", icon: Power, command: "power.shutdown", safe: false },
+  { id: "power", label: "Power", icon: Power, command: "power.status", safe: false },
 ];
 
 const appPresets = [
@@ -59,9 +62,15 @@ type Theme = "light" | "dark";
 type StreamKind = "screen" | "webcam";
 type StreamFrame = { mime: string; frame: string } | null;
 type StreamStats = { status: string; fps: number; frames: number; latencyMs: number };
+type StreamFrameMap = Record<string, StreamFrame>;
+type StreamStatsMap = Record<string, StreamStats>;
 type AppStartMode = "focus_existing" | "new_instance";
 
 const emptyStreamStats: StreamStats = { status: "idle", fps: 0, frames: 0, latencyMs: 0 };
+
+function streamStateKey(agentId: string, stream: StreamKind): string {
+  return `${agentId || "unknown"}:${stream}`;
+}
 
 export function App() {
   const [theme, setTheme] = useState<Theme>("light");
@@ -77,12 +86,11 @@ export function App() {
   const [enrollmentToken, setEnrollmentToken] = useState("");
   const [moduleResultCache, setModuleResultCache] = useState<Record<string, Command>>({});
   const [appStartMode, setAppStartMode] = useState<AppStartMode>("focus_existing");
-  const [streamFrames, setStreamFrames] = useState<Record<StreamKind, StreamFrame>>({ screen: null, webcam: null });
-  const [streamStats, setStreamStats] = useState<Record<StreamKind, StreamStats>>({
-    screen: emptyStreamStats,
-    webcam: emptyStreamStats,
-  });
+  const [streamFrames, setStreamFrames] = useState<StreamFrameMap>({});
+  const [streamStats, setStreamStats] = useState<StreamStatsMap>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const selectedAgentIdRef = useRef(selectedAgentId);
+  const manualAgentSelectionRef = useRef(false);
   const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0], [agents, selectedAgentId]);
   const downloadedCommandIds = useRef<Set<string>>(new Set());
   const downloadEffectsReady = useRef(false);
@@ -96,6 +104,10 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
+  }, [selectedAgentId]);
 
   useEffect(() => {
     const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -113,6 +125,12 @@ export function App() {
       return;
     }
     for (const command of commands) {
+      if (command.status === "succeeded" && ["screen.live.stop", "webcam.live.stop"].includes(command.type)) {
+        const stream = command.type.startsWith("screen.") ? "screen" : "webcam";
+        const key = streamStateKey(command.agent_id, stream);
+        setStreamFrames((frames) => ({ ...frames, [key]: null }));
+        setStreamStats((stats) => ({ ...stats, [key]: { ...emptyStreamStats, status: "idle" } }));
+      }
       if (command.type !== "files.download" || command.status !== "succeeded" || !command.result || downloadedCommandIds.current.has(command.id)) continue;
       downloadedCommandIds.current.add(command.id);
       const downloaded = downloadCommandResult(command.result);
@@ -134,30 +152,44 @@ export function App() {
         if (message.type === "stream.frame" && message.frame) {
           const stream = streamKind(message.stream);
           if (!stream) return;
-          setStreamFrames((frames) => ({ ...frames, [stream]: { mime: message.mime ?? "image/jpeg", frame: message.frame } }));
-          setStreamStats((stats) => ({
-            ...stats,
-            [stream]: {
-              ...stats[stream],
-              status: "running",
-              frames: stats[stream].frames + 1,
-              latencyMs: typeof message.sent_at === "number" ? Math.max(0, Math.round(Date.now() - message.sent_at * 1000)) : stats[stream].latencyMs,
-            },
-          }));
+          const key = streamStateKey(String(message.agent_id ?? ""), stream);
+          setStreamFrames((frames) => ({ ...frames, [key]: { mime: message.mime ?? "image/jpeg", frame: message.frame } }));
+          setStreamStats((stats) => {
+            const current = stats[key] ?? emptyStreamStats;
+            return {
+              ...stats,
+              [key]: {
+                ...current,
+                status: "running",
+                frames: current.frames + 1,
+                latencyMs: typeof message.sent_at === "number" ? Math.max(0, Math.round(Date.now() - message.sent_at * 1000)) : current.latencyMs,
+              },
+            };
+          });
           return;
         }
         if (message.type === "stream.status") {
           const stream = streamKind(message.stream);
           if (!stream) return;
-          setStreamStats((stats) => ({
-            ...stats,
-            [stream]: {
-              ...stats[stream],
-              status: message.status ?? stats[stream].status,
-              fps: Number(message.fps ?? stats[stream].fps),
-              frames: message.status === "running" ? 0 : stats[stream].frames,
-            },
-          }));
+          const key = streamStateKey(String(message.agent_id ?? ""), stream);
+          const nextStatus = message.status ?? "idle";
+          if (["stopped", "failed"].includes(nextStatus)) {
+            setStreamFrames((frames) => ({ ...frames, [key]: null }));
+          }
+          setStreamStats((stats) => {
+            const current = stats[key] ?? emptyStreamStats;
+            return {
+              ...stats,
+              [key]: nextStatus === "stopped" || nextStatus === "failed"
+                ? { ...emptyStreamStats, status: "idle" }
+                : {
+                    ...current,
+                    status: nextStatus,
+                    fps: Number(message.fps ?? current.fps),
+                    frames: nextStatus === "running" ? 0 : current.frames,
+                  },
+            };
+          });
           return;
         }
       } catch {
@@ -176,17 +208,17 @@ export function App() {
     try {
       const data = await loadDashboard(activeToken);
       const nextAgents = data.agents;
-      const selected = nextAgents.find((agent) => agent.id === selectedAgentId);
+      const currentSelectedId = selectedAgentIdRef.current;
+      const selected = nextAgents.find((agent) => agent.id === currentSelectedId);
+      const hasManualSelection = manualAgentSelectionRef.current;
       const onlineAgent = nextAgents.find((agent) => agent.status === "online");
       setAgents(nextAgents);
       setCommands(data.commands);
       setAudit(data.audit);
-      if (onlineAgent && (!selected || selected.status !== "online")) {
-        setSelectedAgentId(onlineAgent.id);
-      } else if (nextAgents[0] && !selected) {
-        setSelectedAgentId(nextAgents[0].id);
-      } else if (!nextAgents.length) {
-        setSelectedAgentId("");
+      if (!nextAgents.length) {
+        chooseAgent("", false);
+      } else if (!selected || (!hasManualSelection && !currentSelectedId)) {
+        chooseAgent((onlineAgent ?? nextAgents[0]).id, false);
       }
       setNotice(nextAgents.length ? "Gateway connected. Live agent data is active." : "Gateway connected. Create an enrollment token, then connect a Windows agent.");
     } catch (error) {
@@ -207,8 +239,8 @@ export function App() {
     setToken("");
     setDemoMode(false);
     setEnrollmentToken("");
-    setStreamFrames({ screen: null, webcam: null });
-    setStreamStats({ screen: emptyStreamStats, webcam: emptyStreamStats });
+    setStreamFrames({});
+    setStreamStats({});
     downloadedCommandIds.current.clear();
     downloadEffectsReady.current = false;
     setNotice("Signed out. Sign in to the live gateway for real agent enrollment.");
@@ -241,20 +273,28 @@ export function App() {
     setNotice("Demo mode active. UI is fully inspectable without a running backend.");
   }
 
+  function chooseAgent(agentId: string, manual = true) {
+    if (manual) manualAgentSelectionRef.current = true;
+    selectedAgentIdRef.current = agentId;
+    setSelectedAgentId(agentId);
+  }
+
   async function runCommand(commandType: string, payload: Record<string, unknown> = defaultPayload(commandType)) {
     if (!selectedAgent || !token) return;
     const startedStream = commandType === "screen.live.start" ? "screen" : commandType === "webcam.live.start" ? "webcam" : null;
-    if (startedStream && ["starting", "running"].includes(streamStats[startedStream].status)) {
-      setNotice(`${startedStream} stream is already ${streamStats[startedStream].status}. Stop it before starting again.`);
+    const startedStreamKey = startedStream && selectedAgent ? streamStateKey(selectedAgent.id, startedStream) : null;
+    const startedStreamStats = startedStreamKey ? streamStats[startedStreamKey] ?? emptyStreamStats : emptyStreamStats;
+    if (startedStream && ["starting", "running"].includes(startedStreamStats.status)) {
+      setNotice(`${startedStream} stream is already ${startedStreamStats.status}. Stop it before starting again.`);
       return;
     }
     if ((commandType === "activity.start" || commandType === "keycapture.start") && keycaptureActive) {
       setNotice("Activity Capture session is already running. Stop it before starting again.");
       return;
     }
-    if (startedStream) {
-      setStreamFrames((frames) => ({ ...frames, [startedStream]: null }));
-      setStreamStats((stats) => ({ ...stats, [startedStream]: { ...emptyStreamStats, status: "starting", fps: Number(payload.fps ?? 10) } }));
+    if (startedStream && startedStreamKey) {
+      setStreamFrames((frames) => ({ ...frames, [startedStreamKey]: null }));
+      setStreamStats((stats) => ({ ...stats, [startedStreamKey]: { ...emptyStreamStats, status: "starting", fps: Number(payload.fps ?? 10) } }));
     }
     if (demoMode) {
       const command: Command = {
@@ -606,8 +646,8 @@ function ModuleSurface({
   selectedAgent?: Agent;
   runCommand: (type: string, payload?: Record<string, unknown>) => void;
   refresh: () => void;
-  streamFrames: Record<StreamKind, StreamFrame>;
-  streamStats: Record<StreamKind, StreamStats>;
+  streamFrames: StreamFrameMap;
+  streamStats: StreamStatsMap;
   latestCommand?: Command;
   keycaptureActive: boolean;
   appStartMode: AppStartMode;
@@ -620,8 +660,9 @@ function ModuleSurface({
   const isLiveModule = module.id === "screen" || module.id === "webcam";
   const isDataModule = ["applications", "processes", "files"].includes(module.id);
   const activeStream = isLiveModule ? (module.id as StreamKind) : null;
-  const activeStats = activeStream ? streamStats[activeStream] : emptyStreamStats;
-  const activeFrame = activeStream ? streamFrames[activeStream] : null;
+  const activeStreamKey = selectedAgent && activeStream ? streamStateKey(selectedAgent.id, activeStream) : null;
+  const activeStats = activeStreamKey ? streamStats[activeStreamKey] ?? emptyStreamStats : emptyStreamStats;
+  const activeFrame = activeStreamKey ? streamFrames[activeStreamKey] ?? null : null;
   const liveRunning = activeStats.status === "running";
   const liveStarting = activeStats.status === "starting";
   const liveActive = liveRunning || liveStarting;
@@ -654,10 +695,10 @@ function ModuleSurface({
           </div>
           {isLiveModule && (
             <div className="stream-stats">
-              <span>{activeStats.status}</span>
-              <span>{activeStats.fps || 10} FPS</span>
-              <span>{activeStats.frames} frames</span>
-              <span>{activeStats.latencyMs} ms</span>
+              <span title="Current live stream state.">{activeStats.status}</span>
+              <span title="FPS: frames per second the Agent tries to send.">{activeStats.fps || 10} FPS <Info size={12} /></span>
+              <span title="Frames: total frames this browser received in the current live session.">{activeStats.frames} frames <Info size={12} /></span>
+              <span title="ms: estimated delay from Agent frame send time to browser receive time.">{activeStats.latencyMs} ms <Info size={12} /></span>
             </div>
           )}
           {!isDataModule && (
@@ -696,7 +737,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
     const webcamReady = moduleId !== "webcam" || (Boolean(webcamDiagnostics?.opencv_available) && Number(webcamDiagnostics?.count ?? 0) > 0);
     const webcamMessage = moduleId === "webcam" && !webcamReady
       ? webcamDiagnostics?.error
-        ? "Install or run the latest Agent EXE with OpenCV bundled, then check cameras again."
+        ? "This Agent EXE cannot load bundled OpenCV. Download and run the latest RemoteCtrlAgent.exe, then check cameras again."
         : "Check cameras before starting webcam live."
       : "";
     return (
@@ -745,8 +786,9 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   if (moduleId === "power") {
     return (
       <div className="control-stack">
-        <div className="danger-note">Dry-run by default. Real power actions require agent-side real mode and local approval.</div>
-        {["shutdown", "restart", "logout"].map((action) => (
+        <button className="primary" onClick={() => runCommand("power.status")} disabled={commandDisabled}>Refresh Power Status</button>
+        <div className="danger-note">Dry-run by default. Real power actions require Agent-side real mode and local approval.</div>
+        {["shutdown", "restart", "logout", "sleep"].map((action) => (
           <button
             className="secondary"
             disabled={commandDisabled}
@@ -903,7 +945,7 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
         {roots.map((root) => (
           <div className="result-row" key={String(root.path)}>
             <div className="row-main">
-              <strong>{String(root.name || root.path)}</strong>
+              <strong className="entry-name"><Folder size={17} /> {String(root.name || root.path)}</strong>
               <div className="row-meta"><span>{root.exists ? "Available" : "Missing"}</span><span>{String(root.path)}</span></div>
             </div>
             <button className="row-action" disabled={!root.exists || !root.is_dir} onClick={() => runCommand("files.list", { path: root.path })}>Open</button>
@@ -916,10 +958,11 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
   return (
     <div className="result-list">
       <div className="result-list-heading"><strong>{String(result.path ?? "Allowed folder")}</strong><span>{entries.length} entries</span></div>
+      {typeof result.path === "string" && <FileBreadcrumb path={result.path} runCommand={runCommand} />}
       {entries.map((entry) => (
         <div className="result-row" key={String(entry.path ?? entry.name)}>
           <div className="row-main">
-            <strong>{String(entry.name ?? "")}</strong>
+            <strong className="entry-name">{entry.is_dir ? <Folder size={17} /> : <FileIcon size={17} />} {String(entry.name ?? "")}</strong>
             <div className="row-meta">
               <span>{entry.is_dir ? "Folder" : "File"}</span>
               <span>{formatBytes(Number(entry.size ?? 0))}</span>
@@ -938,6 +981,36 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
   );
 }
 
+
+function FileBreadcrumb({ path, runCommand }: { path: string; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+  const parts = buildPathBreadcrumb(path);
+  if (!parts.length) return null;
+  return (
+    <div className="file-breadcrumb" aria-label="Current directory">
+      {parts.map((part, index) => (
+        <button key={`${part.path}-${index}`} onClick={() => runCommand("files.list", { path: part.path })}>
+          {part.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function buildPathBreadcrumb(rawPath: string): { label: string; path: string }[] {
+  const normalized = rawPath.replace(/\//g, "\\");
+  const driveMatch = normalized.match(/^([A-Za-z]:)(?:\\|$)/);
+  if (!driveMatch) return [{ label: normalized, path: normalized }];
+  const drive = driveMatch[1];
+  const tail = normalized.slice(drive.length).replace(/^\\/, "");
+  const names = tail ? tail.split("\\").filter(Boolean) : [];
+  const parts = [{ label: drive, path: `${drive}\\` }];
+  let current = `${drive}\\`;
+  for (const name of names) {
+    current = current.endsWith("\\") ? `${current}${name}` : `${current}\\${name}`;
+    parts.push({ label: name, path: current });
+  }
+  return parts;
+}
 
 function DownloadResult({ result }: { result: Record<string, unknown> }) {
   return (
@@ -959,7 +1032,7 @@ function MediaResult({ command }: { command: Command }) {
         {Boolean(result.error) && <div className="result-card danger"><span>Webcam issue</span><pre>{String(result.error)}</pre></div>}
         {cameras.map((camera) => (
           <div className="result-row" key={String(camera.index)}>
-            <div className="row-main"><strong>{String(camera.label ?? `Camera ${camera.index}`)}</strong><div className="row-meta"><span>Index {String(camera.index)}</span><span>OpenCV ready</span></div></div>
+            <div className="row-main"><strong>{String(camera.label ?? `Camera ${camera.index}`)}</strong><div className="row-meta"><span>Index {String(camera.index)}</span><span>OpenCV bundled</span></div></div>
           </div>
         ))}
         <DeveloperDetails result={result} />
@@ -979,6 +1052,20 @@ function MediaResult({ command }: { command: Command }) {
 }
 
 function PowerResult({ result }: { result: Record<string, unknown> }) {
+  const isStatus = result.action === "status";
+  if (isStatus) {
+    return (
+      <div className="state-card">
+        {Boolean(result.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/logout/sleep can execute.</div>}
+        <div className="power-grid">
+          <PowerMetric tone="temp" label="Temperature" value={formatNullable(result.temperature_celsius, " C")} />
+          <PowerMetric tone="uptime" label="System uptime" value={formatDuration(Number(result.system_uptime_seconds ?? 0))} />
+          <PowerMetric tone="battery" label="Battery" value={formatBattery(result.battery_percent, result.battery_plugged)} />
+        </div>
+        <DeveloperDetails result={result} />
+      </div>
+    );
+  }
   return (
     <div className="state-card">
       <strong>{String(result.action ?? "power")}</strong>
@@ -987,6 +1074,36 @@ function PowerResult({ result }: { result: Record<string, unknown> }) {
       <DeveloperDetails result={result} />
     </div>
   );
+}
+
+function PowerMetric({ tone, label, value }: { tone: string; label: string; value: string }) {
+  return (
+    <div className={`power-metric ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function formatNullable(value: unknown, suffix = ""): string {
+  if (value === null || value === undefined || value === "") return "Unavailable";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric}${suffix}` : String(value);
+}
+
+function formatBattery(percent: unknown, plugged: unknown): string {
+  if (percent === null || percent === undefined) return "Unavailable";
+  return `${Number(percent).toFixed(0)}%${plugged === true ? " plugged" : ""}`;
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "Unavailable";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function KeyCaptureResult({ result }: { result: Record<string, unknown> }) {
@@ -1036,7 +1153,7 @@ function moduleCommandTypes(moduleId: string): string[] {
     files: ["files.roots", "files.list", "files.download"],
     webcam: ["webcam.list", "webcam.snapshot", "webcam.live.start", "webcam.live.stop"],
     keycapture: ["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"],
-    power: ["power.shutdown", "power.restart", "power.logout"],
+    power: ["power.status", "power.shutdown", "power.restart", "power.logout", "power.sleep"],
   };
   return map[moduleId] ?? [];
 }
@@ -1172,6 +1289,8 @@ function commandRequiresApproval(commandType: string): boolean {
     "power.shutdown",
     "power.restart",
     "power.logout",
+    "power.sleep",
+    "power.status",
   ]).has(commandType);
 }
 function defaultPayload(commandType: string): Record<string, unknown> {
@@ -1205,7 +1324,8 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
     return { path: String(payload.path ?? "D:\\Data"), entries: [{ name: "Reports", path: "D:\\Data\\Reports", is_dir: true, size: 0 }, { name: "report.docx", path: "D:\\Data\\report.docx", is_dir: false, size: 81234 }] };
   }
   if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
-  if (commandType === "webcam.list") return { opencv_available: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
+  if (commandType === "webcam.list") return { opencv_available: true, cv2_available: true, agent_packaged: true, cv2_version: "4.x", count: 1, items: [{ index: 0, label: "Camera 0" }] };
+  if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, temperature_celsius: null, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "logout", "sleep"] };
   if (commandType === "activity.export") return { mode: "visible_activity_session", events: [{ time: new Date().toISOString(), type: "active_window.changed", detail: { process: "Code.exe", title: "RemoteCtrl" } }] };
   return { status: "queued", approval_required: true };
 }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import queue
+import time
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -31,6 +33,9 @@ class AgentApp(tk.Tk):
         self.activity_keyboard_listener = None
         self.activity_pressed_modifiers: set[str] = set()
         self.activity_text_buffer = ""
+        self.pending_approval_windows: dict[str, dict] = {}
+        self.hidden_capture_windows: list[tuple[tk.Misc, str]] = []
+        self.real_power_var = tk.BooleanVar(value=not self.config_data.dry_run_power)
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.handlers = CommandHandlers(self.config_data, self.keycapture_provider)
         self.client = AgentClient(self.config_data, self.handlers, self.set_status_threadsafe, self.request_approval_threadsafe)
@@ -69,6 +74,7 @@ class AgentApp(tk.Tk):
         ttk.Button(controls, text="Pause / Resume", command=self.toggle_pause).pack(side="left", padx=8)
         ttk.Button(controls, text="Allow folder for Web Files", command=self.add_folder).pack(side="left", padx=8)
         ttk.Button(controls, text="Reset session approvals", command=self.reset_session_approvals).pack(side="left", padx=8)
+        ttk.Checkbutton(controls, text="Allow real power actions", variable=self.real_power_var, command=self.toggle_real_power).pack(side="left", padx=8)
 
         status_card = ttk.Frame(outer, style="Card.TFrame", padding=20)
         status_card.pack(fill="both", expand=True, pady=(18, 0))
@@ -135,6 +141,11 @@ class AgentApp(tk.Tk):
         if not self.config_data.paused:
             self.client.start()
 
+    def toggle_real_power(self) -> None:
+        self.config_data.dry_run_power = not bool(self.real_power_var.get())
+        save_config(self.config_data)
+        self.append_log("Real power actions enabled" if not self.config_data.dry_run_power else "Real power actions disabled")
+
     def add_folder(self) -> None:
         folder = filedialog.askdirectory(title="Allow this folder for Web Files")
         if folder and folder not in self.config_data.allowed_folders:
@@ -184,10 +195,7 @@ class AgentApp(tk.Tk):
                 self.append_log(str(payload))
             elif kind == "approval":
                 message, response = payload
-                command_type = message.get("command_type", "remote action")
-                decision = self.show_approval_dialog(message)
-                response.put(decision)
-                self.append_log(f"Approval {'granted' if decision.get('approved') else 'denied'}: {command_type}")
+                self.show_approval_dialog(message, response)
             elif kind == "log":
                 self.append_log(str(payload))
         self.refresh_session_status()
@@ -219,22 +227,39 @@ class AgentApp(tk.Tk):
             y = self.winfo_rooty() + max(0, (parent_height - child_height) // 2)
         win.geometry(f"+{x}+{y}")
 
-    def show_approval_dialog(self, message: dict) -> dict:
+    def approval_request_key(self, message: dict) -> str:
+        payload = message.get("payload") or {}
+        try:
+            normalized = json.dumps(payload, sort_keys=True, default=str)
+        except TypeError:
+            normalized = str(payload)
+        return f"{message.get('command_type', 'remote action')}::{normalized}"
+
+    def show_approval_dialog(self, message: dict, response: queue.Queue) -> None:
         command_type = str(message.get("command_type", "remote action"))
         payload = message.get("payload") or {}
+        key = self.approval_request_key(message)
+        existing = self.pending_approval_windows.get(key)
+        if existing and existing.get("win") and existing["win"].winfo_exists():
+            existing["responses"].append(response)
+            existing["seconds_left"]["value"] = 90
+            existing["count"]["value"] += 1
+            existing["countdown"].set(f"Request refreshed {existing['count']['value']} time(s). Auto-deny in 90s if no response.")
+            existing["summary"].set(self.approval_summary(payload))
+            self.append_log(f"Approval prompt refreshed: {command_type}")
+            return
+
         decision = {"approved": False, "approval_mode": "prompt_once", "policy_scope": "single_command"}
-        self.present_for_approval()
         self.append_log(f"Approval prompt shown: {command_type}")
         win = tk.Toplevel(self)
         win.title("RemoteCtrl Approval")
         win.geometry("560x340")
-        win.transient(self)
-        win.grab_set()
         win.configure(bg="#ffffff")
         win.attributes("-topmost", True)
         ttk.Label(win, text="Allow remote action?", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=20, pady=(18, 6))
         ttk.Label(win, text=command_type, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20)
-        ttk.Label(win, text=self.approval_summary(payload), wraplength=510).pack(anchor="w", padx=20, pady=(10, 14))
+        summary_var = tk.StringVar(value=self.approval_summary(payload))
+        ttk.Label(win, textvariable=summary_var, wraplength=510).pack(anchor="w", padx=20, pady=(10, 14))
         ttk.Label(win, text="This decision will be audited by the gateway.").pack(anchor="w", padx=20, pady=(0, 14))
         countdown = tk.StringVar(value="Auto-deny in 90s if no response.")
         ttk.Label(win, textvariable=countdown, foreground="#b42318").pack(anchor="w", padx=20, pady=(0, 8))
@@ -242,6 +267,9 @@ class AgentApp(tk.Tk):
         buttons.pack(fill="x", padx=20, pady=(8, 18))
         closed = {"done": False}
         seconds_left = {"value": 90}
+        count = {"value": 1}
+        record = {"win": win, "responses": [response], "seconds_left": seconds_left, "countdown": countdown, "summary": summary_var, "count": count}
+        self.pending_approval_windows[key] = record
 
         def choose(approved: bool, scope: str, mode: str = "prompt_once") -> None:
             if closed["done"]:
@@ -250,17 +278,20 @@ class AgentApp(tk.Tk):
             decision["approved"] = approved
             decision["approval_mode"] = mode
             decision["policy_scope"] = scope
-            try:
-                win.grab_release()
-            except tk.TclError:
-                pass
+            for waiting_response in list(record["responses"]):
+                try:
+                    waiting_response.put_nowait(dict(decision))
+                except queue.Full:
+                    pass
+            self.pending_approval_windows.pop(key, None)
+            self.append_log(f"Approval {'granted' if approved else 'denied'}: {command_type}")
             try:
                 win.destroy()
             except tk.TclError:
                 pass
 
         def tick() -> None:
-            if closed["done"]:
+            if closed["done"] or not win.winfo_exists():
                 return
             seconds_left["value"] -= 1
             if seconds_left["value"] <= 0:
@@ -277,8 +308,6 @@ class AgentApp(tk.Tk):
         win.after(50, lambda: (win.lift(), win.focus_force()))
         win.after(700, lambda: win.attributes("-topmost", False))
         win.after(1000, tick)
-        self.wait_window(win)
-        return decision
 
     def approval_summary(self, payload: dict) -> str:
         if not payload:
@@ -296,6 +325,59 @@ class AgentApp(tk.Tk):
         webcam = "running" if "webcam" in self.client.active_streams else "idle"
         activity = "running" if self.activity_window and self.activity_window.winfo_exists() else "idle"
         self.session_var.set(f"Screen: {screen} | Webcam: {webcam} | Activity: {activity}")
+
+    def hide_agent_windows_for_capture(self) -> None:
+        if self.hidden_capture_windows:
+            return
+        windows: list[tk.Misc] = [self]
+        windows.extend(child for child in self.winfo_children() if isinstance(child, tk.Toplevel))
+        for window in windows:
+            try:
+                if not window.winfo_exists():
+                    continue
+                state = window.state()
+                if state != "withdrawn":
+                    self.hidden_capture_windows.append((window, state))
+                    window.withdraw()
+            except tk.TclError:
+                continue
+        self.update_idletasks()
+
+    def restore_agent_windows_after_capture(self) -> None:
+        for window, state in list(self.hidden_capture_windows):
+            try:
+                if not window.winfo_exists():
+                    continue
+                if state == "iconic":
+                    window.iconify()
+                elif state == "normal":
+                    window.deiconify()
+                elif state == "zoomed":
+                    window.deiconify()
+                    window.state("zoomed")
+            except tk.TclError:
+                continue
+        self.hidden_capture_windows.clear()
+        self.update_idletasks()
+
+    def run_ui_action_sync(self, action, timeout: float = 2.0) -> None:
+        done: queue.Queue[bool] = queue.Queue(maxsize=1)
+
+        def wrapper() -> None:
+            try:
+                action()
+            finally:
+                try:
+                    done.put_nowait(True)
+                except queue.Full:
+                    pass
+
+        self.after(0, wrapper)
+        try:
+            done.get(timeout=timeout)
+        except queue.Empty:
+            self.ui_queue.put(("log", "Timed out while preparing Agent windows for screen capture"))
+
     def identity_text(self) -> str:
         if not self.config_data.agent_id:
             return "Not enrolled yet"
@@ -309,6 +391,13 @@ class AgentApp(tk.Tk):
         self.log_box.configure(state="disabled")
 
     def keycapture_provider(self, action: str):
+        if action == "screen_capture_hide":
+            self.run_ui_action_sync(self.hide_agent_windows_for_capture)
+            time.sleep(0.12)
+            return "hidden"
+        if action == "screen_capture_restore":
+            self.run_ui_action_sync(self.restore_agent_windows_after_capture)
+            return "restored"
         if action == "start":
             already_running = self.client.keycapture_active
             self.after(0, self.open_keycapture_window)

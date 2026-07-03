@@ -509,6 +509,10 @@ h1, h2, p { margin: 0; }
   gap: 7px;
 }
 .stream-stats span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel-solid);
@@ -597,6 +601,50 @@ h1, h2, p { margin: 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.entry-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.entry-name svg { flex: 0 0 auto; color: var(--primary); }
+.file-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  background: var(--panel);
+}
+.file-breadcrumb button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--primary);
+  background: var(--panel-solid);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.power-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.power-metric {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 13px;
+}
+.power-metric span { color: var(--muted); font-size: 12px; font-weight: 800; }
+.power-metric strong { font-size: 20px; }
+.power-metric.temp { border-top: 3px solid #ef4444; }
+.power-metric.uptime { border-top: 3px solid #3b82f6; }
+.power-metric.battery { border-top: 3px solid #22c55e; }
+
 .guarded-row { color: var(--muted); }
 .row-action {
   flex: 0 0 auto;

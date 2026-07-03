@@ -23,3 +23,7 @@ def test_command_sensitive_approval(tmp_path: Path):
     assert command["requires_approval"] is True
     command = repo.create_command(agent["id"], "activity.stop", {}, "a@b.test")
     assert command["requires_approval"] is True
+    command = repo.create_command(agent["id"], "power.sleep", {}, "a@b.test")
+    assert command["requires_approval"] is True
+    command = repo.create_command(agent["id"], "power.status", {}, "a@b.test")
+    assert command["requires_approval"] is True

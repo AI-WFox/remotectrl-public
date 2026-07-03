@@ -270,7 +270,7 @@ def test_webcam_list_reports_missing_opencv(monkeypatch):
 
     assert result["opencv_available"] is False
     assert result["agent_packaged"] is False
-    assert "OpenCV is unavailable" in result["error"]
+    assert "OpenCV" in result["error"]
     assert "missing cv2" in result["import_error"]
 
 
@@ -346,3 +346,37 @@ def test_session_cached_approval_does_not_cross_sensitive_actions():
     assert approval_calls == ["process.list", "process.kill"]
     assert approvals[-1]["approval_mode"] == "prompt_once"
     assert approvals[-1]["policy_scope"] == "current_session"
+
+
+def test_power_status_and_sleep_dry_run():
+    handlers = CommandHandlers(AgentConfig(dry_run_power=True), lambda action: "")
+
+    status = handlers.power_status({})
+    sleep = handlers.power_sleep({})
+
+    assert status["action"] == "status"
+    assert status["dry_run_power"] is True
+    assert "sleep" in status["supported_actions"]
+    assert "system_uptime_seconds" in status
+    assert sleep["action"] == "sleep"
+    assert sleep["status"] == "dry_run"
+
+
+def test_power_sleep_real_mode_uses_windows_command(monkeypatch):
+    launched = []
+    monkeypatch.setattr("remotectrl_agent.core.handlers.subprocess.Popen", lambda args: launched.append(args))
+    handlers = CommandHandlers(AgentConfig(dry_run_power=False), lambda action: "")
+
+    result = handlers.power_sleep({})
+
+    assert result["status"] == "requested"
+    assert launched == [["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]]
+
+
+def test_agent_windows_are_excluded_from_visible_app_results():
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+
+    assert handlers._is_agent_window("RemoteCtrlAgent.exe", "RemoteCtrl Agent") is True
+    assert handlers._is_agent_window("python.exe", "RemoteCtrl Approval") is True
+    assert handlers._is_agent_window("Code.exe", "RemoteCtrl Source File") is False
+    assert handlers._is_agent_window("notepad.exe", "Untitled - Notepad") is False

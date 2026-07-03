@@ -35,6 +35,8 @@ APPROVAL_REQUIRED_COMMANDS = {
     "power.shutdown",
     "power.restart",
     "power.logout",
+    "power.sleep",
+    "power.status",
 }
 
 
