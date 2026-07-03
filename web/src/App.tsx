@@ -958,7 +958,7 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
   return (
     <div className="result-list">
       <div className="result-list-heading"><strong>{String(result.path ?? "Allowed folder")}</strong><span>{entries.length} entries</span></div>
-      {typeof result.path === "string" && <FileBreadcrumb path={result.path} runCommand={runCommand} />}
+      {typeof result.path === "string" && <FileBreadcrumb path={result.path} rootPath={typeof result.allowed_root === "string" ? result.allowed_root : undefined} runCommand={runCommand} />}
       {entries.map((entry) => (
         <div className="result-row" key={String(entry.path ?? entry.name)}>
           <div className="row-main">
@@ -982,8 +982,8 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
 }
 
 
-function FileBreadcrumb({ path, runCommand }: { path: string; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const parts = buildPathBreadcrumb(path);
+function FileBreadcrumb({ path, rootPath, runCommand }: { path: string; rootPath?: string; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+  const parts = buildPathBreadcrumb(path, rootPath);
   if (!parts.length) return null;
   return (
     <div className="file-breadcrumb" aria-label="Current directory">
@@ -996,20 +996,44 @@ function FileBreadcrumb({ path, runCommand }: { path: string; runCommand: (type:
   );
 }
 
-function buildPathBreadcrumb(rawPath: string): { label: string; path: string }[] {
-  const normalized = rawPath.replace(/\//g, "\\");
-  const driveMatch = normalized.match(/^([A-Za-z]:)(?:\\|$)/);
-  if (!driveMatch) return [{ label: normalized, path: normalized }];
-  const drive = driveMatch[1];
-  const tail = normalized.slice(drive.length).replace(/^\\/, "");
-  const names = tail ? tail.split("\\").filter(Boolean) : [];
-  const parts = [{ label: drive, path: `${drive}\\` }];
-  let current = `${drive}\\`;
-  for (const name of names) {
-    current = current.endsWith("\\") ? `${current}${name}` : `${current}\\${name}`;
-    parts.push({ label: name, path: current });
+function buildPathBreadcrumb(rawPath: string, rootPath?: string): { label: string; path: string }[] {
+  const normalized = normalizeWindowsPath(rawPath);
+  const normalizedRoot = rootPath ? normalizeWindowsPath(rootPath) : "";
+  const effectiveRoot = normalizedRoot && isPathInsideRoot(normalized, normalizedRoot) ? normalizedRoot : normalized;
+  const rootParts = splitWindowsPath(effectiveRoot);
+  const currentParts = splitWindowsPath(normalized);
+  if (!rootParts.length) return [{ label: normalized, path: normalized }];
+  const parts: { label: string; path: string }[] = [];
+  for (let index = rootParts.length - 1; index < currentParts.length; index += 1) {
+    const path = joinWindowsParts(currentParts.slice(0, index + 1));
+    parts.push({ label: currentParts[index], path });
   }
   return parts;
+}
+
+function normalizeWindowsPath(value: string): string {
+  return value.replace(/\//g, "\\").replace(/\\+$/g, "");
+}
+
+function splitWindowsPath(value: string): string[] {
+  const normalized = normalizeWindowsPath(value);
+  const driveMatch = normalized.match(/^([A-Za-z]:)(?:\\|$)/);
+  if (!driveMatch) return normalized.split("\\").filter(Boolean);
+  const tail = normalized.slice(driveMatch[1].length).replace(/^\\/, "");
+  return [driveMatch[1], ...tail.split("\\").filter(Boolean)];
+}
+
+function joinWindowsParts(parts: string[]): string {
+  if (!parts.length) return "";
+  const [first, ...rest] = parts;
+  if (/^[A-Za-z]:$/.test(first)) return rest.length ? `${first}\\${rest.join("\\")}` : `${first}\\`;
+  return parts.join("\\");
+}
+
+function isPathInsideRoot(path: string, root: string): boolean {
+  const left = normalizeWindowsPath(path).toLowerCase();
+  const right = normalizeWindowsPath(root).toLowerCase();
+  return left === right || left.startsWith(`${right}\\`);
 }
 
 function DownloadResult({ result }: { result: Record<string, unknown> }) {

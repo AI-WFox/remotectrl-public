@@ -303,10 +303,14 @@ class CommandHandlers:
             roots = self.files_roots({})
             roots["entries"] = []
             return roots
-        target = self._safe_path(raw_path)
+        target, allowed_root = self._safe_path_with_root(raw_path)
         entries = []
+        skipped_hidden = 0
         for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
             try:
+                if self._should_hide_file_entry(entry):
+                    skipped_hidden += 1
+                    continue
                 stat = entry.stat()
                 entries.append(
                     {
@@ -318,10 +322,12 @@ class CommandHandlers:
                 )
             except OSError:
                 continue
-        return {"path": str(target), "entries": entries[:500]}
+        return {"path": str(target), "allowed_root": str(allowed_root), "entries": entries[:500], "hidden_filtered": skipped_hidden}
 
     def files_download(self, payload: dict[str, Any]) -> dict[str, Any]:
         target = self._safe_path(payload.get("path"))
+        if self._should_hide_file_entry(target):
+            raise PermissionError("Hidden/system files are not exposed by Web Files")
         if not target.is_file():
             raise ValueError("path must be a file")
         if target.stat().st_size > 10 * 1024 * 1024:
@@ -547,14 +553,39 @@ class CommandHandlers:
         except Exception:
             return False
 
-    def _safe_path(self, raw_path: Any) -> Path:
+    def _allowed_roots(self) -> list[Path]:
+        return [Path(folder).expanduser().resolve() for folder in self.config.allowed_folders]
+
+    def _safe_path_with_root(self, raw_path: Any) -> tuple[Path, Path]:
         if not raw_path:
             raise ValueError("path is required")
         target = Path(str(raw_path)).expanduser().resolve()
-        allowed = [Path(folder).expanduser().resolve() for folder in self.config.allowed_folders]
-        if not any(target == root or root in target.parents for root in allowed):
-            raise PermissionError("Path is outside allowed folders")
+        for root in self._allowed_roots():
+            if target == root or root in target.parents:
+                return target, root
+        raise PermissionError("Path is outside allowed folders")
+
+    def _safe_path(self, raw_path: Any) -> Path:
+        target, _root = self._safe_path_with_root(raw_path)
         return target
+
+    def _should_hide_file_entry(self, path: Path) -> bool:
+        name = path.name.lower()
+        if name in {"desktop.ini", "thumbs.db"} or name.startswith("~$"):
+            return True
+        if os.name != "nt":
+            return name.startswith(".")
+        try:
+            import ctypes
+
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+            if attrs == 0xFFFFFFFF:
+                return False
+            hidden = 0x2
+            system = 0x4
+            return bool(attrs & (hidden | system))
+        except Exception:
+            return False
 
     def _is_allowed_app(self, path: str) -> bool:
         resolved = Path(path).expanduser().resolve()
