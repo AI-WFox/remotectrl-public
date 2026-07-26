@@ -1,6 +1,4 @@
-from remotectrl_agent.ui.app import main
+from remotectrl_agent.sidecar import run
 
-
-if __name__ == "__main__":
-    main()
-
+if __name__ == '__main__':
+    run()

@@ -255,24 +255,6 @@ def test_files_roots_and_empty_files_list_do_not_open_default_folder(tmp_path: P
     assert listed["entries"] == []
 
 
-def test_webcam_list_reports_missing_opencv(monkeypatch):
-    real_import = __import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "cv2":
-            raise ImportError("missing cv2")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", fake_import)
-    handlers = CommandHandlers(AgentConfig(), lambda action: "")
-
-    result = handlers.webcam_list({})
-
-    assert result["opencv_available"] is False
-    assert result["agent_packaged"] is False
-    assert "OpenCV" in result["error"]
-    assert "missing cv2" in result["import_error"]
-
 
 def test_session_cached_approval_covers_matching_session_stop():
     class FakeHandlers:
@@ -380,3 +362,25 @@ def test_agent_windows_are_excluded_from_visible_app_results():
     assert handlers._is_agent_window("python.exe", "RemoteCtrl Approval") is True
     assert handlers._is_agent_window("Code.exe", "RemoteCtrl Source File") is False
     assert handlers._is_agent_window("notepad.exe", "Untitled - Notepad") is False
+
+def test_webview2_webcam_forwards_frames_without_opencv():
+    calls = []
+
+    def camera_provider(action, payload):
+        calls.append((action, payload))
+        return {"capture_backend": "webview2", "status": "running"}
+
+    client = AgentClient(AgentConfig(), SimpleNamespace(), lambda _status: None, lambda _message: False, camera_provider)
+    ws = FakeWs()
+
+    client._start_tauri_webcam(ws, "start-command", "agent-1", {"fps": 12})
+    accepted = client.publish_webcam_frame("ZmFrZS1mcmFtZQ==")
+    stopped = client._stop_tauri_webcam()
+
+    assert accepted == {"accepted": True, "frame_index": 1}
+    assert stopped == {"stream": "webcam", "status": "stopped"}
+    assert [action for action, _payload in calls] == ["start", "stop"]
+    assert [message["type"] for message in ws.messages] == ["stream_status", "stream_frame", "stream_status", "command_result"]
+    assert ws.messages[0]["status"] == "running"
+    assert ws.messages[1]["frame"] == "ZmFrZS1mcmFtZQ=="
+    assert ws.messages[-1]["ok"] is True

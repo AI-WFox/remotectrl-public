@@ -64,6 +64,8 @@ type StreamFrame = { mime: string; frame: string } | null;
 type StreamStats = { status: string; fps: number; frames: number; latencyMs: number };
 type StreamFrameMap = Record<string, StreamFrame>;
 type StreamStatsMap = Record<string, StreamStats>;
+type ActivityEvent = { time: string; type: string; detail: Record<string, unknown> };
+type ActivityEventMap = Record<string, ActivityEvent[]>;
 type AppStartMode = "focus_existing" | "new_instance";
 
 const emptyStreamStats: StreamStats = { status: "idle", fps: 0, frames: 0, latencyMs: 0 };
@@ -88,6 +90,7 @@ export function App() {
   const [appStartMode, setAppStartMode] = useState<AppStartMode>("focus_existing");
   const [streamFrames, setStreamFrames] = useState<StreamFrameMap>({});
   const [streamStats, setStreamStats] = useState<StreamStatsMap>({});
+  const [activityEvents, setActivityEvents] = useState<ActivityEventMap>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
   const selectedAgentIdRef = useRef(selectedAgentId);
   const manualAgentSelectionRef = useRef(false);
@@ -149,6 +152,16 @@ export function App() {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+        if (message.type === "activity.event" && message.event && typeof message.event === "object") {
+          const agentId = String(message.agent_id ?? "")
+          if (!agentId) return
+          const activityEvent = message.event as ActivityEvent
+          setActivityEvents((current) => ({
+            ...current,
+            [agentId]: [activityEvent, ...(current[agentId] ?? [])].slice(0, 1000),
+          }))
+          return
+        }
         if (message.type === "stream.frame" && message.frame) {
           const stream = streamKind(message.stream);
           if (!stream) return;
@@ -241,6 +254,7 @@ export function App() {
     setEnrollmentToken("");
     setStreamFrames({});
     setStreamStats({});
+    setActivityEvents({});
     downloadedCommandIds.current.clear();
     downloadEffectsReady.current = false;
     setNotice("Signed out. Sign in to the live gateway for real agent enrollment.");
@@ -545,6 +559,7 @@ export function App() {
               refresh={refresh}
               streamFrames={streamFrames}
               streamStats={streamStats}
+              activityEvents={selectedAgent ? activityEvents[selectedAgent.id] ?? [] : []}
               latestCommand={latestModuleCommand}
               keycaptureActive={keycaptureActive}
               appStartMode={appStartMode}
@@ -636,6 +651,7 @@ function ModuleSurface({
   refresh,
   streamFrames,
   streamStats,
+  activityEvents,
   latestCommand,
   keycaptureActive,
   appStartMode,
@@ -648,6 +664,7 @@ function ModuleSurface({
   refresh: () => void;
   streamFrames: StreamFrameMap;
   streamStats: StreamStatsMap;
+  activityEvents: ActivityEvent[];
   latestCommand?: Command;
   keycaptureActive: boolean;
   appStartMode: AppStartMode;
@@ -725,6 +742,7 @@ function ModuleSurface({
             </div>
           )}
           <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
+          {module.id === "keycapture" && <LiveActivityFeed events={activityEvents} />}
         </div>
       </div>
     </>
@@ -1133,6 +1151,31 @@ function formatDuration(seconds: number): string {
   return `${minutes}m`;
 }
 
+function LiveActivityFeed({ events }: { events: ActivityEvent[] }) {
+  return (
+    <div className="result-list" aria-live="polite">
+      <div className="result-list-heading"><strong>Live device activity</strong><span>{events.length} event(s)</span></div>
+      {events.length ? events.slice(0, 80).map((event, index) => (
+        <div className="result-row" key={`${event.time}-${event.type}-${index}`}>
+          <div className="row-main"><strong>{event.type.replace(/\./g, " ")}</strong><div className="row-meta"><span>{activityEventSummary(event)}</span></div></div>
+          <time>{formatTime(event.time)}</time>
+        </div>
+      )) : <div className="empty-result"><strong>Waiting for approved activity session</strong><p>Events from this selected device will appear here in real time.</p></div>}
+    </div>
+  );
+}
+
+function activityEventSummary(event: ActivityEvent): string {
+  const detail = event.detail ?? {};
+  const window = detail.window as Record<string, unknown> | undefined;
+  if (typeof detail.text === "string") return detail.text;
+  if (typeof detail.keys === "string") return detail.keys;
+  if (typeof detail.key === "string") return detail.key;
+  if (typeof detail.title === "string") return `${String(detail.process ?? "App")}: ${detail.title}`;
+  if (window && typeof window.title === "string") return `${String(window.process ?? "App")}: ${window.title}`;
+  if (typeof detail.x === "number" && typeof detail.y === "number") return `Click at ${detail.x}, ${detail.y}`;
+  return "Device activity";
+}
 function KeyCaptureResult({ result }: { result: Record<string, unknown> }) {
   const events = asRecords(result.events).slice(-30).reverse();
   return (

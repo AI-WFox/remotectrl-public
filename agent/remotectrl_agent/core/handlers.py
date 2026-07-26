@@ -6,6 +6,7 @@ import io
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -67,9 +68,6 @@ class CommandHandlers:
             "files.roots": self.files_roots,
             "files.list": self.files_list,
             "files.download": self.files_download,
-            "webcam.list": self.webcam_list,
-            "webcam.snapshot": self.webcam_snapshot,
-            "webcam.live.start": self.webcam_snapshot,
             "power.shutdown": self.power_shutdown,
             "power.restart": self.power_restart,
             "power.logout": self.power_logout,
@@ -338,60 +336,6 @@ class CommandHandlers:
             "mime": "application/octet-stream",
             "data": base64.b64encode(target.read_bytes()).decode(),
         }
-
-    def webcam_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            import cv2
-        except ImportError as exc:
-            raise RuntimeError("OpenCV is unavailable in this Agent. Install agent/requirements.txt or run the latest packaged Agent EXE with OpenCV bundled.") from exc
-        camera_index = int(payload.get("camera_index", 0))
-        cap = cv2.VideoCapture(camera_index)
-        try:
-            if not cap.isOpened():
-                raise RuntimeError(f"Camera {camera_index} is not available")
-            ok, frame = cap.read()
-            if not ok:
-                raise RuntimeError("Unable to read webcam frame")
-            quality = min(max(int(payload.get("quality", 75)), 35), 90)
-            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-            if not ok:
-                raise RuntimeError("Unable to encode webcam frame")
-            return {"mime": "image/jpeg", "image": base64.b64encode(encoded.tobytes()).decode(), "camera_index": camera_index}
-        finally:
-            cap.release()
-
-    def webcam_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        packaged = bool(getattr(sys, "frozen", False))
-        try:
-            import cv2
-        except ImportError as exc:
-            return {
-                "items": [],
-                "count": 0,
-                "opencv_available": False,
-                "cv2_available": False,
-                "agent_packaged": packaged,
-                "error": "Packaged Agent EXE is missing OpenCV. Download and run the latest RemoteCtrlAgent.exe build.",
-                "packaging_error": "cv2 import failed inside packaged EXE" if packaged else "Source-run Agent is missing cv2; packaged EXE includes it.",
-                "import_error": str(exc),
-            }
-        items = []
-        errors = []
-        for index in range(4):
-            cap = cv2.VideoCapture(index)
-            try:
-                if cap.isOpened():
-                    items.append({"index": index, "label": f"Camera {index}"})
-            except Exception as exc:
-                errors.append(f"Camera {index}: {exc}")
-            finally:
-                cap.release()
-        result = {"items": items, "count": len(items), "opencv_available": True, "cv2_available": True, "agent_packaged": packaged, "cv2_version": getattr(cv2, "__version__", "unknown"), "packaging_error": None}
-        if not items:
-            result["error"] = "No camera was detected on the Windows agent"
-        if errors:
-            result["diagnostics"] = errors
-        return result
 
     def power_shutdown(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return self._power(["shutdown", "/s", "/t", "5"], "shutdown")

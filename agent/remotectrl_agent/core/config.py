@@ -19,12 +19,13 @@ class AgentConfig:
     allowed_folders: list[str] = field(default_factory=lambda: [str(Path.home())])
     paused: bool = False
     dry_run_power: bool = True
+    ui_theme: str = "light"
 
 
 def load_config() -> AgentConfig:
     if not CONFIG_PATH.exists():
         return AgentConfig()
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     return AgentConfig(**data)
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import platform
 import queue
@@ -19,6 +18,7 @@ from remotectrl_agent.core.protocol import http_to_ws, result
 
 StatusCallback = Callable[[str], None]
 ApprovalCallback = Callable[[dict], dict[str, Any] | bool]
+WebcamCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 class AgentClient:
@@ -28,14 +28,19 @@ class AgentClient:
         handlers: CommandHandlers,
         on_status: StatusCallback,
         request_approval: ApprovalCallback,
+        webcam_provider: WebcamCallback | None = None,
     ) -> None:
         self.config = config
         self.handlers = handlers
         self.on_status = on_status
         self.request_approval = request_approval
+        self.webcam_provider = webcam_provider
+        self.webcam_stream: dict[str, Any] | None = None
+        self.active_ws: Any | None = None
         self.outbox: queue.Queue[dict] = queue.Queue()
         self.stop_event = threading.Event()
         self.send_lock = threading.Lock()
+        self.state_lock = threading.RLock()
         self.active_streams: dict[str, tuple[threading.Event, threading.Thread]] = {}
         self.session_approvals: set[str] = set()
         self.keycapture_active = False
@@ -43,17 +48,32 @@ class AgentClient:
         self.thread: threading.Thread | None = None
 
     def enroll(self, enrollment_token: str) -> None:
-        response = requests.post(
-            f"{self.config.server_url.rstrip('/')}/api/agents/enroll",
-            json={
-                "enrollment_token": enrollment_token,
-                "name": self.config.agent_name,
-                "hostname": socket.gethostname(),
-                "os": platform.platform(),
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
+        endpoint = f"{self.config.server_url.rstrip('/')}/api/agents/enroll"
+        try:
+            response = requests.post(
+                endpoint,
+                json={
+                    "enrollment_token": enrollment_token,
+                    "name": self.config.agent_name,
+                    "hostname": socket.gethostname(),
+                    "os": platform.platform(),
+                },
+                timeout=15,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Cannot reach the Gateway. Check the Gateway URL and internet connection. ({exc})") from exc
+
+        if response.status_code == 403:
+            raise ValueError("Enrollment token is invalid or has already been used. Create a new enrollment token in the dashboard.")
+        if not response.ok:
+            detail = ""
+            try:
+                detail = str(response.json().get("detail") or "")
+            except ValueError:
+                detail = response.text.strip()
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(f"Gateway rejected enrollment ({response.status_code}){suffix}")
+
         data = response.json()
         self.config.agent_id = data["agent_id"]
         self.config.agent_token = data["agent_token"]
@@ -89,6 +109,8 @@ class AgentClient:
         ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent?token={self.config.agent_token}"
         self.on_status("Connecting")
         ws = websocket.create_connection(ws_url, timeout=10)
+        with self.state_lock:
+            self.active_ws = ws
         self.on_status("Connected")
         last_telemetry = 0.0
         try:
@@ -103,14 +125,29 @@ class AgentClient:
                     continue
                 if not raw:
                     break
-                self._handle_message(ws, json.loads(raw))
+                # Consent waits must not block the socket reader; each command has its own worker.
+                threading.Thread(target=self._handle_message, args=(ws, json.loads(raw)), daemon=True).start()
         finally:
             self._stop_all_streams()
-            self.session_approvals.clear()
-            self.keycapture_active = False
-            self.activity_active = False
+            with self.state_lock:
+                self.active_ws = None
+                self.session_approvals.clear()
+                self.keycapture_active = False
+                self.activity_active = False
             ws.close()
 
+    def publish_activity_event(self, event: dict[str, Any]) -> bool:
+        """Relay visible-session activity to the authenticated dashboard in real time."""
+        with self.state_lock:
+            ws = self.active_ws
+            agent_id = self.config.agent_id
+        if not ws or not agent_id:
+            return False
+        try:
+            self._send(ws, {"type": "activity_event", "agent_id": agent_id, "event": event})
+            return True
+        except Exception:
+            return False
     def _handle_message(self, ws, message: dict) -> None:
         if message.get("type") != "command":
             return
@@ -122,7 +159,8 @@ class AgentClient:
             self._send(ws, result(command_id, agent_id, True, payload={"status": "already_running", "stream": self._stream_name(command_type)}))
             return
         if command_type in {"keycapture.start", "activity.start"}:
-            already_active = self.keycapture_active if command_type == "keycapture.start" else self.activity_active
+            with self.state_lock:
+                already_active = self.keycapture_active if command_type == "keycapture.start" else self.activity_active
             if already_active:
                 payload_result = self.handlers.handle(command_type, payload)
                 payload_result["status"] = "already_running"
@@ -152,35 +190,45 @@ class AgentClient:
                 payload_result = self._stop_stream(command_type)
                 self._send(ws, result(command_id, agent_id, True, payload=payload_result))
                 return
-            payload_result = self.handlers.handle(command_type, payload)
+            if command_type in {"webcam.list", "webcam.snapshot"}:
+                payload_result = self._webcam_request("list" if command_type == "webcam.list" else "snapshot", payload)
+            else:
+                payload_result = self.handlers.handle(command_type, payload)
             if command_type == "keycapture.start" and payload_result.get("status") in {"started", "already_running"}:
-                self.keycapture_active = True
+                with self.state_lock:
+                    self.keycapture_active = True
             elif command_type == "keycapture.stop":
-                self.keycapture_active = False
+                with self.state_lock:
+                    self.keycapture_active = False
             elif command_type == "activity.start" and payload_result.get("status") in {"started", "already_running"}:
-                self.activity_active = True
+                with self.state_lock:
+                    self.activity_active = True
             elif command_type == "activity.stop":
-                self.activity_active = False
+                with self.state_lock:
+                    self.activity_active = False
             self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
 
 
     def reset_session_approvals(self) -> None:
-        self.session_approvals.clear()
+        with self.state_lock:
+            self.session_approvals.clear()
 
     def _approval_decision(self, message: dict) -> dict[str, Any]:
         command_type = message.get("command_type", "")
         family = self._approval_family(command_type)
-        if family in self.session_approvals:
-            return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
+        with self.state_lock:
+            if family in self.session_approvals:
+                return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
         raw = self.request_approval(message)
         if isinstance(raw, bool):
             return {"approved": raw, "approval_mode": "prompt_once", "policy_scope": "single_command"}
         approved = bool(raw.get("approved"))
         policy_scope = str(raw.get("policy_scope") or "single_command")
         if approved and policy_scope == "current_session":
-            self.session_approvals.add(family)
+            with self.state_lock:
+                self.session_approvals.add(family)
         return {
             "approved": approved,
             "approval_mode": str(raw.get("approval_mode") or "prompt_once"),
@@ -205,41 +253,109 @@ class AgentClient:
         return "screen" if command_type.startswith("screen.") else "webcam"
 
     def _stream_active(self, command_type: str) -> bool:
-        return self._stream_name(command_type) in self.active_streams
+        if self._stream_name(command_type) == "webcam":
+            return self.webcam_stream is not None
+        return "screen" in self.active_streams
+
+    @property
+    def webcam_active(self) -> bool:
+        return self.webcam_stream is not None
+
     def _start_stream(self, ws, command_id: str, agent_id: str, command_type: str, payload: dict) -> None:
         stream = self._stream_name(command_type)
+        if stream == "webcam":
+            self._start_tauri_webcam(ws, command_id, agent_id, payload)
+            return
         stop_stream = threading.Event()
         thread = threading.Thread(
             target=self._stream_frames,
             args=(ws, command_id, agent_id, stream, command_type, payload, stop_stream),
             daemon=True,
         )
-        self.active_streams[stream] = (stop_stream, thread)
+        with self.state_lock:
+            self.active_streams[stream] = (stop_stream, thread)
         thread.start()
 
     def _stop_stream(self, command_type: str) -> dict:
         stream = self._stream_name(command_type)
-        active = self.active_streams.get(stream)
+        if stream == "webcam":
+            return self._stop_tauri_webcam()
+        with self.state_lock:
+            active = self.active_streams.get(stream)
         if not active:
             return {"stream": stream, "status": "not_running"}
         stop_stream, thread = active
         stop_stream.set()
         if thread.is_alive():
             thread.join(timeout=2)
-        self.active_streams.pop(stream, None)
+        with self.state_lock:
+            self.active_streams.pop(stream, None)
         return {"stream": stream, "status": "stop_requested"}
 
     def _stop_all_streams(self) -> None:
-        for stream, (stop_stream, thread) in list(self.active_streams.items()):
+        if self.webcam_stream is not None:
+            try:
+                self._stop_tauri_webcam()
+            except Exception:
+                pass
+        with self.state_lock:
+            streams = list(self.active_streams.items())
+        for stream, (stop_stream, thread) in streams:
             stop_stream.set()
             if thread.is_alive():
                 thread.join(timeout=2)
-            self.active_streams.pop(stream, None)
+            with self.state_lock:
+                self.active_streams.pop(stream, None)
 
-    def _stream_frames(self, ws, command_id: str, agent_id: str, stream: str, command_type: str, payload: dict, stop_stream: threading.Event) -> None:
-        if stream == "webcam":
-            self._stream_webcam_frames(ws, command_id, agent_id, payload, stop_stream)
+    def _webcam_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.webcam_provider:
+            raise RuntimeError("This Agent does not include the WebView2 webcam capture service. Install the latest desktop Agent.")
+        response = self.webcam_provider(action, payload)
+        if not isinstance(response, dict):
+            raise RuntimeError("Webcam service returned an invalid response")
+        if response.get("error"):
+            raise RuntimeError(str(response["error"]))
+        return response
+
+    def _start_tauri_webcam(self, ws, command_id: str, agent_id: str, payload: dict[str, Any]) -> None:
+        started = self._webcam_request("start", payload)
+        fps = min(max(float(payload.get("fps", 15)), 1.0), 20.0)
+        with self.state_lock:
+            self.webcam_stream = {"ws": ws, "command_id": command_id, "agent_id": agent_id, "started": time.time(), "frames": 0, "fps": fps}
+        self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "running", "fps": fps, "backend": started.get("capture_backend", "webview2")})
+
+    def publish_webcam_frame(self, frame: str, mime: str = "image/jpeg") -> dict[str, Any]:
+        with self.state_lock:
+            stream = self.webcam_stream
+            if not stream:
+                return {"accepted": False, "reason": "not_running"}
+            stream["frames"] += 1
+            frame_index = stream["frames"]
+        self._send(stream["ws"], {"type": "stream_frame", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "mime": mime, "frame": frame, "frame_index": frame_index, "sent_at": time.time()})
+        return {"accepted": True, "frame_index": frame_index}
+
+    def fail_webcam_stream(self, error: str) -> None:
+        with self.state_lock:
+            stream = self.webcam_stream
+            self.webcam_stream = None
+        if not stream:
             return
+        self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "failed", "fps": stream["fps"], "error": error})
+        self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], False, error=error))
+    def _stop_tauri_webcam(self) -> dict[str, Any]:
+        with self.state_lock:
+            stream = self.webcam_stream
+        if not stream:
+            return {"stream": "webcam", "status": "not_running"}
+        try:
+            self._webcam_request("stop", {})
+        finally:
+            with self.state_lock:
+                self.webcam_stream = None
+        self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "stopped", "fps": stream["fps"]})
+        self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], True, payload={"stream": "webcam", "frames": stream["frames"], "duration_seconds": round(time.time() - stream["started"], 2), "fps": stream["fps"], "capture_backend": "webview2"}))
+        return {"stream": "webcam", "status": "stopped"}
+    def _stream_frames(self, ws, command_id: str, agent_id: str, stream: str, command_type: str, payload: dict, stop_stream: threading.Event) -> None:
         fps = min(max(float(payload.get("fps", 10)), 1.0), 15.0)
         frame_count = 0
         started = time.time()
@@ -290,77 +406,8 @@ class AgentClient:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
         finally:
             self._notify_handler_provider("screen_capture_restore")
-            self.active_streams.pop(stream, None)
-
-    def _stream_webcam_frames(self, ws, command_id: str, agent_id: str, payload: dict, stop_stream: threading.Event) -> None:
-        fps = min(max(float(payload.get("fps", 15)), 1.0), 20.0)
-        quality = min(max(int(payload.get("quality", 40)), 25), 85)
-        width = int(payload.get("width", 640) or 640)
-        height = int(payload.get("height", 360) or 360)
-        camera_index = int(payload.get("camera_index", 0))
-        frame_count = 0
-        started = time.time()
-        cap = None
-        self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "running", "fps": fps})
-        try:
-            import cv2
-
-            backend = getattr(cv2, "CAP_DSHOW", 0)
-            cap = cv2.VideoCapture(camera_index, backend) if backend else cv2.VideoCapture(camera_index)
-            if not cap.isOpened() and backend:
-                cap.release()
-                cap = cv2.VideoCapture(camera_index)
-            if not cap.isOpened():
-                raise RuntimeError(f"Camera {camera_index} is not available")
-            if hasattr(cv2, "VideoWriter_fourcc") and hasattr(cv2, "CAP_PROP_FOURCC"):
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            while not stop_stream.is_set() and not self.stop_event.is_set():
-                frame_started = time.time()
-                ok, frame = cap.read()
-                if not ok:
-                    raise RuntimeError("Unable to read webcam frame")
-                if width > 0 and height > 0:
-                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-                ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-                if not ok:
-                    raise RuntimeError("Unable to encode webcam frame")
-                self._send(
-                    ws,
-                    {
-                        "type": "stream_frame",
-                        "command_id": command_id,
-                        "agent_id": agent_id,
-                        "stream": "webcam",
-                        "mime": "image/jpeg",
-                        "frame": base64.b64encode(encoded.tobytes()).decode(),
-                        "frame_index": frame_count + 1,
-                        "sent_at": time.time(),
-                    },
-                )
-                frame_count += 1
-                elapsed = time.time() - frame_started
-                stop_stream.wait(max(0.0, (1 / fps) - elapsed))
-            self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "stopped", "fps": fps})
-            self._send(
-                ws,
-                result(
-                    command_id,
-                    agent_id,
-                    True,
-                    payload={"stream": "webcam", "frames": frame_count, "duration_seconds": round(time.time() - started, 2), "fps": fps, "width": width, "height": height, "quality": quality},
-                ),
-            )
-        except Exception as exc:
-            self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "failed", "fps": fps, "error": str(exc)})
-            self._send(ws, result(command_id, agent_id, False, error=str(exc)))
-        finally:
-            if cap is not None:
-                cap.release()
-            self.active_streams.pop("webcam", None)
+            with self.state_lock:
+                self.active_streams.pop(stream, None)
 
     def _notify_handler_provider(self, action: str) -> None:
         provider = getattr(self.handlers, "keycapture_provider", None)

@@ -319,6 +319,12 @@ async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -
         )
         repo.audit("agent", "command.result", agent_id, command_id, {"ok": ok})
         await manager.broadcast_dashboard({"type": "command.updated", "command": command})
+    elif message_type == "activity_event":
+        event = message.get("event")
+        if not isinstance(event, dict):
+            return
+        await manager.broadcast_dashboard({"type": "activity.event", "agent_id": agent_id, "event": event})
+        return
     elif message_type == "stream_frame":
         await manager.broadcast_dashboard({**message, "type": "stream.frame", "agent_id": agent_id})
         return

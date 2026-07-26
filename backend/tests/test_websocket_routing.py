@@ -130,3 +130,36 @@ def test_command_routes_only_to_selected_agent_when_two_agents_online(tmp_path):
             assert routed["agent_id"] == second["agent_id"]
             assert routed["command_type"] == "files.roots"
             ws_a.close()
+
+
+def test_activity_events_reach_dashboard_only_as_realtime_messages(tmp_path):
+    settings.database_path = tmp_path / "activity-events.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("activity", reusable=True)
+
+    client = TestClient(app)
+    enrolled = client.post(
+        "/api/agents/enroll",
+        json={"enrollment_token": enrollment_token, "name": "Activity Agent", "hostname": "activity-host", "os": "Windows"},
+    ).json()
+
+    with client.websocket_connect("/ws/dashboard") as dashboard:
+        assert dashboard.receive_json()["role"] == "dashboard"
+        with client.websocket_connect(f"/ws/agent?token={enrolled['agent_token']}") as agent:
+            agent.receive_json()
+            dashboard.receive_json()  # agent.online
+            agent.send_json(
+                {
+                    "type": "activity_event",
+                    "agent_id": enrolled["agent_id"],
+                    "event": {"time": "2026-07-26T20:00:00", "type": "active_window.changed", "detail": {"title": "Notepad"}},
+                }
+            )
+            event = dashboard.receive_json()
+            assert event == {
+                "type": "activity.event",
+                "agent_id": enrolled["agent_id"],
+                "event": {"time": "2026-07-26T20:00:00", "type": "active_window.changed", "detail": {"title": "Notepad"}},
+            }

@@ -1,0 +1,21 @@
+[package]
+name = "remotectrl-agent-desktop"
+version = "0.2.0"
+description = "RemoteCtrl consent-first Windows Agent"
+authors = ["RemoteCtrl Team"]
+license = "UNLICENSED"
+repository = "https://github.com/AI-WFox/remotectrl-public"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "remotectrl_agent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.3", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
