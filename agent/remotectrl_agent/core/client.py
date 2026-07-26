@@ -192,6 +192,12 @@ class AgentClient:
                 return
             if command_type in {"webcam.list", "webcam.snapshot"}:
                 payload_result = self._webcam_request("list" if command_type == "webcam.list" else "snapshot", payload)
+            elif command_type == "screen.screenshot":
+                # A live screen session already hides Agent windows. Keep that state while taking a still.
+                screenshot_payload = dict(payload)
+                if self._stream_active("screen.live.start"):
+                    screenshot_payload["_screen_hidden"] = True
+                payload_result = self.handlers.handle(command_type, screenshot_payload)
             else:
                 payload_result = self.handlers.handle(command_type, payload)
             if command_type == "keycapture.start" and payload_result.get("status") in {"started", "already_running"}:

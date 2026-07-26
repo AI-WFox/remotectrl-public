@@ -384,3 +384,33 @@ def test_webview2_webcam_forwards_frames_without_opencv():
     assert ws.messages[0]["status"] == "running"
     assert ws.messages[1]["frame"] == "ZmFrZS1mcmFtZQ=="
     assert ws.messages[-1]["ok"] is True
+
+def test_capture_still_keeps_agent_windows_hidden_while_screen_live():
+    class FakeHandlers:
+        def __init__(self):
+            self.payloads = []
+
+        def handle(self, command_type, payload):
+            self.payloads.append((command_type, payload))
+            return {"mime": "image/jpeg", "image": "ZmFrZQ=="}
+
+    handlers = FakeHandlers()
+    ws = FakeWs()
+    client = AgentClient(AgentConfig(), handlers, lambda status: None, lambda command: True)
+    client.active_streams["screen"] = (object(), object())
+
+    client._handle_message(
+        ws,
+        {
+            "type": "command",
+            "command_id": "still-1",
+            "agent_id": "agent-1",
+            "command_type": "screen.screenshot",
+            "payload": {"quality": 85},
+            "requires_approval": False,
+        },
+    )
+
+    assert handlers.payloads == [("screen.screenshot", {"quality": 85, "_screen_hidden": True})]
+    assert ws.messages[-1]["type"] == "command_result"
+    assert ws.messages[-1]["ok"] is True

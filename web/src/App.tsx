@@ -775,7 +775,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
         <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={commandDisabled || !liveRunning}>
           <Square size={16} /> Stop Live
         </button>
-        {moduleId === "screen" && <button className="secondary" onClick={() => runCommand("screen.screenshot", { quality: 75 })} disabled={commandDisabled}>Capture Screenshot</button>}
+        {moduleId === "screen" && <button className="secondary" onClick={() => runCommand("screen.screenshot", { quality: 85 })} disabled={commandDisabled} title="Save a full-resolution still without stopping the live stream">Capture Still</button>}
         {webcamMessage && <div className="inline-hint danger-text">{webcamMessage}</div>}
       </div>
     );
