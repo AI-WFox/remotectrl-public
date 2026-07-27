@@ -202,6 +202,7 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     if (message.event === "agent.ready") applyState(message.data?.state)
     if (message.event === "agent.status") applyState(message.data?.state)
     if (message.event === "agent.config") applyState(message.data?.state)
+    if (message.event === "agent.session_state") applyState(message.data?.state)
     if (message.event === "activity.started") await openActivityWindow()
     return
   }

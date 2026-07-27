@@ -66,7 +66,10 @@ class AgentSidecar:
         self.logs: list[dict[str, str]] = []
         self.activity = ActivityCapture(self._activity_event)
         self.handlers = CommandHandlers(self.config, self._provider)
-        self.client = AgentClient(self.config, self.handlers, self._on_status, self._approval, self._webcam_request)
+        self.client = AgentClient(self.config, self.handlers, self._on_status, self._approval, self._webcam_request, self._on_session_change)
+        self._last_session_signature: tuple[bool, bool, bool, bool] | None = None
+        if hasattr(self.bridge, "closed"):
+            threading.Thread(target=self._monitor_sessions, daemon=True).start()
 
     def start_saved_connection(self) -> None:
         if self.config.agent_token and not self.config.paused:
@@ -83,6 +86,21 @@ class AgentSidecar:
         self._log(status, "error" if status.lower().startswith("disconnected") else "info")
         self.bridge.event("agent.status", {"status": status, "state": self.state()})
 
+    def _on_session_change(self) -> None:
+        self._emit_session_state(force=True)
+
+    def _monitor_sessions(self) -> None:
+        while not self.bridge.closed.wait(0.5):
+            self._emit_session_state()
+
+    def _emit_session_state(self, force: bool = False) -> None:
+        state = self.state()
+        sessions = state["sessions"]
+        signature = (bool(sessions["screen"]), bool(sessions["webcam"]), bool(sessions["activity"]), bool(sessions["keycapture"]))
+        if not force and signature == self._last_session_signature:
+            return
+        self._last_session_signature = signature
+        self.bridge.event("agent.session_state", {"state": state})
     def _activity_event(self, _event: str, data: dict[str, Any]) -> None:
         # Detailed events belong to the selected Web dashboard, not the Agent console.
         self.client.publish_activity_event(data)

@@ -19,6 +19,7 @@ from remotectrl_agent.core.protocol import http_to_ws, result
 StatusCallback = Callable[[str], None]
 ApprovalCallback = Callable[[dict], dict[str, Any] | bool]
 WebcamCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
+SessionCallback = Callable[[], None]
 
 
 class AgentClient:
@@ -29,12 +30,14 @@ class AgentClient:
         on_status: StatusCallback,
         request_approval: ApprovalCallback,
         webcam_provider: WebcamCallback | None = None,
+        on_session_change: SessionCallback | None = None,
     ) -> None:
         self.config = config
         self.handlers = handlers
         self.on_status = on_status
         self.request_approval = request_approval
         self.webcam_provider = webcam_provider
+        self.on_session_change = on_session_change
         self.webcam_stream: dict[str, Any] | None = None
         self.active_ws: Any | None = None
         self.outbox: queue.Queue[dict] = queue.Queue()
@@ -134,6 +137,7 @@ class AgentClient:
                 self.session_approvals.clear()
                 self.keycapture_active = False
                 self.activity_active = False
+            self._notify_session_change()
             ws.close()
 
     def publish_activity_event(self, event: dict[str, Any]) -> bool:
@@ -212,11 +216,20 @@ class AgentClient:
             elif command_type == "activity.stop":
                 with self.state_lock:
                     self.activity_active = False
+            if command_type in {"keycapture.start", "keycapture.stop", "activity.start", "activity.stop"}:
+                self._notify_session_change()
             self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
             self._send(ws, result(command_id, agent_id, False, error=str(exc)))
 
 
+    def _notify_session_change(self) -> None:
+        if not self.on_session_change:
+            return
+        try:
+            self.on_session_change()
+        except Exception:
+            pass
     def reset_session_approvals(self) -> None:
         with self.state_lock:
             self.session_approvals.clear()

@@ -73,3 +73,14 @@ def test_sidecar_sends_activity_detail_to_gateway_not_agent_console(monkeypatch)
 
     assert relayed == [event]
     assert ("activity.event", event) not in bridge.events
+
+def test_session_state_event_reflects_running_webcam():
+    bridge = FakeBridge()
+    app = AgentSidecar(bridge, AgentConfig(agent_id="agent-1", agent_token="secret-token"))
+    app.client.webcam_stream = {"command_id": "stream-1"}
+
+    app._on_session_change()
+
+    name, payload = bridge.events[-1]
+    assert name == "agent.session_state"
+    assert payload["state"]["sessions"]["webcam"] is True
