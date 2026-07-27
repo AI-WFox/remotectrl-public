@@ -354,32 +354,21 @@ class CommandHandlers:
             "action": "status",
             "status": "ok",
             "dry_run_power": self.config.dry_run_power,
-            "supported_actions": ["shutdown", "restart", "logout", "sleep"],
+            "supported_actions": ["shutdown", "restart", "sleep"],
             "system_uptime_seconds": None,
             "battery_percent": None,
             "battery_plugged": None,
-            "temperature_celsius": None,
+            "cpu_percent": None,
         }
         try:
             import psutil
 
             status["system_uptime_seconds"] = max(0, int(time.time() - psutil.boot_time()))
+            status["cpu_percent"] = round(float(psutil.cpu_percent(interval=0.2)), 1)
             battery = psutil.sensors_battery()
             if battery is not None:
                 status["battery_percent"] = round(float(battery.percent), 1)
                 status["battery_plugged"] = bool(battery.power_plugged)
-            try:
-                temperatures = psutil.sensors_temperatures()
-            except Exception:
-                temperatures = {}
-            for sensors in temperatures.values():
-                for sensor in sensors:
-                    current = getattr(sensor, "current", None)
-                    if current is not None:
-                        status["temperature_celsius"] = round(float(current), 1)
-                        raise StopIteration
-        except StopIteration:
-            pass
         except Exception as exc:
             status["diagnostic_error"] = str(exc)
         return status

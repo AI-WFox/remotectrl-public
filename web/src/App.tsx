@@ -1113,7 +1113,7 @@ function PowerResult({ result }: { result: Record<string, unknown> }) {
       <div className="state-card">
         {Boolean(result.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/sleep can execute.</div>}
         <div className="power-grid">
-          <PowerMetric tone="temp" label="Temperature" value={formatNullable(result.temperature_celsius, " C")} />
+          <PowerMetric tone="temp" label="CPU usage" value={formatNullable(result.cpu_percent, "%")} />
           <PowerMetric tone="uptime" label="System uptime" value={formatDuration(Number(result.system_uptime_seconds ?? 0))} />
           <PowerMetric tone="battery" label="Battery" value={formatBattery(result.battery_percent, result.battery_plugged)} />
         </div>
@@ -1422,7 +1422,7 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
   }
   if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
   if (commandType === "webcam.list") return { capture_backend: "webview2", available: true, opencv_available: false, cv2_available: false, agent_packaged: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
-  if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, temperature_celsius: null, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "sleep"] };
+  if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, cpu_percent: 23, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "sleep"] };
   if (commandType === "activity.export") return { mode: "visible_activity_session", events: [{ time: new Date().toISOString(), type: "active_window.changed", detail: { process: "Code.exe", title: "RemoteCtrl" } }] };
   return { status: "queued", approval_required: true };
 }

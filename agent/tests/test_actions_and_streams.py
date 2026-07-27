@@ -339,6 +339,7 @@ def test_power_status_and_sleep_dry_run():
     assert status["action"] == "status"
     assert status["dry_run_power"] is True
     assert "sleep" in status["supported_actions"]
+    assert "cpu_percent" in status
     assert "system_uptime_seconds" in status
     assert sleep["action"] == "sleep"
     assert sleep["status"] == "dry_run"
