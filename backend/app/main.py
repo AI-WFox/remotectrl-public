@@ -289,8 +289,8 @@ async def agent_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        manager.disconnect_agent(agent["id"])
-        if repo.get_agent(agent["id"]):
+        disconnected_current_socket = manager.disconnect_agent(agent["id"], websocket)
+        if disconnected_current_socket and repo.get_agent(agent["id"]):
             repo.set_agent_status(agent["id"], "offline")
             repo.audit("agent", "agent.disconnected", agent_id=agent["id"])
             await manager.broadcast_dashboard({"type": "agent.offline", "agent_id": agent["id"]})

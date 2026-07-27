@@ -120,13 +120,21 @@ function AgentConsole() {
       if (payload === "agent.pause_toggle") localBridge.call("agent.pause_toggle").then(applyState).catch((error: Error) => toast.error(error.message))
       if (payload === "agent.reset_approvals") localBridge.call("agent.reset_approvals").then(() => toast.success("Session approvals reset"))
     })
-    localBridge.start().then(() => localBridge.call("agent.get_state").then(applyState).catch(() => undefined)).finally(() => setReady(true))
+    const syncState = () => localBridge.call("agent.get_state").then(applyState).catch(() => undefined)
+    const onVisibilityChange = () => {
+      if (!document.hidden) syncState()
+    }
+    window.addEventListener("focus", syncState)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    localBridge.start().then(syncState).finally(() => setReady(true))
     return () => {
       unsubscribe()
       unlistenPromise.then((unlisten) => unlisten())
       approvalFinishedPromise.then((unlisten) => unlisten())
       activityStopPromise.then((unlisten) => unlisten())
       trayPromise.then((unlisten) => unlisten())
+      window.removeEventListener("focus", syncState)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
       localBridge.close()
     }
   }, [])

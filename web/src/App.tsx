@@ -448,7 +448,15 @@ export function App() {
   const onlineCount = agents.filter((agent) => agent.status === "online").length;
   const pendingApprovals = commands.filter((command) => command.status === "pending_approval").length;
   const activeModule = modules.find((item) => item.id === selectedModule) ?? modules[0];
-  const latestModuleCommand = selectedAgent ? moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)] ?? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type)) : undefined;
+  const latestModuleCommand = selectedAgent
+    ? moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)]
+      ?? commands.find((command) => (
+        command.agent_id === selectedAgent.id
+        && moduleCommandTypes(selectedModule).includes(command.type)
+        && !(selectedAgent.status === "online" && command.status === "failed" && command.error === "Agent offline")
+      ))
+      ?? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type))
+    : undefined;
   const commandDisabled = !selectedAgent || (!demoMode && selectedAgent.status !== "online");
 
   return (

@@ -13,8 +13,17 @@ class SessionManager:
         await websocket.accept()
         self.agent_sockets[agent_id] = websocket
 
-    def disconnect_agent(self, agent_id: str) -> None:
+    def disconnect_agent(self, agent_id: str, websocket: WebSocket) -> bool:
+        """Remove an agent only when its current socket is the one closing.
+
+        An Agent can reconnect before the previous WebSocket has finished its
+        disconnect handler. Without this identity check, the old handler can
+        remove the new, healthy connection and incorrectly mark it offline.
+        """
+        if self.agent_sockets.get(agent_id) is not websocket:
+            return False
         self.agent_sockets.pop(agent_id, None)
+        return True
 
     async def close_agent(self, agent_id: str, code: int = 4400, reason: str = "Agent removed") -> bool:
         websocket = self.agent_sockets.pop(agent_id, None)

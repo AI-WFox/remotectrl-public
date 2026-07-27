@@ -293,6 +293,7 @@ class AgentClient:
         )
         with self.state_lock:
             self.active_streams[stream] = (stop_stream, thread)
+        self._notify_session_change()
         thread.start()
 
     def _stop_stream(self, command_type: str) -> dict:
@@ -309,6 +310,7 @@ class AgentClient:
             thread.join(timeout=2)
         with self.state_lock:
             self.active_streams.pop(stream, None)
+        self._notify_session_change()
         return {"stream": stream, "status": "stop_requested"}
 
     def _stop_all_streams(self) -> None:
@@ -325,6 +327,7 @@ class AgentClient:
                 thread.join(timeout=2)
             with self.state_lock:
                 self.active_streams.pop(stream, None)
+        self._notify_session_change()
 
     def _webcam_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.webcam_provider:
@@ -341,6 +344,7 @@ class AgentClient:
         fps = min(max(float(payload.get("fps", 15)), 1.0), 20.0)
         with self.state_lock:
             self.webcam_stream = {"ws": ws, "command_id": command_id, "agent_id": agent_id, "started": time.time(), "frames": 0, "fps": fps}
+        self._notify_session_change()
         self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": "webcam", "status": "running", "fps": fps, "backend": started.get("capture_backend", "webview2")})
 
     def publish_webcam_frame(self, frame: str, mime: str = "image/jpeg") -> dict[str, Any]:
@@ -357,6 +361,7 @@ class AgentClient:
         with self.state_lock:
             stream = self.webcam_stream
             self.webcam_stream = None
+        self._notify_session_change()
         if not stream:
             return
         self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "failed", "fps": stream["fps"], "error": error})
@@ -371,6 +376,7 @@ class AgentClient:
         finally:
             with self.state_lock:
                 self.webcam_stream = None
+            self._notify_session_change()
         self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "stopped", "fps": stream["fps"]})
         self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], True, payload={"stream": "webcam", "frames": stream["frames"], "duration_seconds": round(time.time() - stream["started"], 2), "fps": stream["fps"], "capture_backend": "webview2"}))
         return {"stream": "webcam", "status": "stopped"}
@@ -427,6 +433,7 @@ class AgentClient:
             self._notify_handler_provider("screen_capture_restore")
             with self.state_lock:
                 self.active_streams.pop(stream, None)
+            self._notify_session_change()
 
     def _notify_handler_provider(self, action: str) -> None:
         provider = getattr(self.handlers, "keycapture_provider", None)
