@@ -751,7 +751,7 @@ function ModuleSurface({
 
 function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, keycaptureActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean, latestCommand?: Command) {
   if (moduleId === "screen" || moduleId === "webcam") {
-    const webcamDiagnostics = moduleId === "webcam" && latestCommand?.type === "webcam.list" ? latestCommand.result : undefined;
+    const webcamDiagnostics = moduleId === "webcam" ? latestCommand?.result : undefined;
     const isWebViewCamera = webcamDiagnostics?.capture_backend === "webview2";
     const webcamReady = moduleId !== "webcam" || ((isWebViewCamera || Boolean(webcamDiagnostics?.opencv_available)) && Boolean(webcamDiagnostics?.available ?? true) && Number(webcamDiagnostics?.count ?? 0) > 0);
     const webcamMessage = moduleId === "webcam" && !webcamReady
@@ -776,6 +776,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
           <Square size={16} /> Stop Live
         </button>
         {moduleId === "screen" && <button className="secondary" onClick={() => runCommand("screen.screenshot", { quality: 85 })} disabled={commandDisabled} title="Save a full-resolution still without stopping the live stream">Capture Still</button>}
+        {moduleId === "webcam" && <button className="secondary" onClick={() => runCommand("webcam.snapshot", { quality: 85, width: 1280, height: 720 })} disabled={commandDisabled || !webcamReady} title="Save a still camera image without stopping the live stream">Capture Snapshot</button>}
         {webcamMessage && <div className="inline-hint danger-text">{webcamMessage}</div>}
       </div>
     );
@@ -1241,7 +1242,7 @@ function cacheModuleForCommand(commandType: string): string | null {
   if (commandType === "app.list") return "applications";
   if (commandType === "process.list") return "processes";
   if (commandType === "files.roots" || commandType === "files.list") return "files";
-  if (commandType === "webcam.list") return "webcam";
+  if (commandType === "webcam.list" || commandType === "webcam.snapshot") return "webcam";
   if (commandType === "screen.screenshot") return "screen";
   if (["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"].includes(commandType)) return "keycapture";
   if (commandType.startsWith("power.")) return "power";

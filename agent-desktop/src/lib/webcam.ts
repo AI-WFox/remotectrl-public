@@ -50,14 +50,15 @@ export class LocalWebcam {
   }
 
   async snapshot(payload: CameraPayload) {
+    const wasStreaming = Boolean(this.stream)
     try {
-      await this.open(payload)
-      const frame = await this.capture(Number(payload.quality ?? 75))
-      return { mime: "image/jpeg", image: frame, capture_backend: "webview2" }
+      if (!wasStreaming) await this.open(payload)
+      const frame = await this.capture(Number(payload.quality ?? 85))
+      return { mime: "image/jpeg", image: frame, capture_backend: "webview2", available: true, count: 1 }
     } catch (error) {
       return { error: cameraError(error) }
     } finally {
-      this.stop()
+      if (!wasStreaming) this.stop()
     }
   }
 
