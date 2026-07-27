@@ -818,7 +818,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
       <div className="control-stack">
         <button className="primary" onClick={() => runCommand("power.status")} disabled={commandDisabled}>Refresh Power Status</button>
         <div className="danger-note">Dry-run by default. Real power actions require Agent-side real mode and local approval.</div>
-        {["shutdown", "restart", "logout", "sleep"].map((action) => (
+        {["shutdown", "restart", "sleep"].map((action) => (
           <button
             className="secondary"
             disabled={commandDisabled}
@@ -1111,7 +1111,7 @@ function PowerResult({ result }: { result: Record<string, unknown> }) {
   if (isStatus) {
     return (
       <div className="state-card">
-        {Boolean(result.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/logout/sleep can execute.</div>}
+        {Boolean(result.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/sleep can execute.</div>}
         <div className="power-grid">
           <PowerMetric tone="temp" label="Temperature" value={formatNullable(result.temperature_celsius, " C")} />
           <PowerMetric tone="uptime" label="System uptime" value={formatDuration(Number(result.system_uptime_seconds ?? 0))} />
@@ -1220,7 +1220,7 @@ function copyForModule(id: string): string {
     files: "Choose an allowed root before browsing files.",
     webcam: "Check camera diagnostics before live capture.",
     keycapture: "Visible activity capture session, never a hidden keylogger.",
-    power: "Request shutdown/restart/logout with local confirmation.",
+    power: "Request shutdown/restart/sleep with local confirmation.",
   };
   return copy[id] ?? "Remote operation surface.";
 }
@@ -1233,7 +1233,7 @@ function moduleCommandTypes(moduleId: string): string[] {
     files: ["files.roots", "files.list", "files.download"],
     webcam: ["webcam.list", "webcam.snapshot", "webcam.live.start", "webcam.live.stop"],
     keycapture: ["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"],
-    power: ["power.status", "power.shutdown", "power.restart", "power.logout", "power.sleep"],
+    power: ["power.status", "power.shutdown", "power.restart", "power.sleep"],
   };
   return map[moduleId] ?? [];
 }
@@ -1386,7 +1386,6 @@ function commandRequiresApproval(commandType: string): boolean {
     "activity.export",
     "power.shutdown",
     "power.restart",
-    "power.logout",
     "power.sleep",
     "power.status",
   ]).has(commandType);
@@ -1423,7 +1422,7 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
   }
   if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
   if (commandType === "webcam.list") return { capture_backend: "webview2", available: true, opencv_available: false, cv2_available: false, agent_packaged: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
-  if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, temperature_celsius: null, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "logout", "sleep"] };
+  if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, temperature_celsius: null, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "sleep"] };
   if (commandType === "activity.export") return { mode: "visible_activity_session", events: [{ time: new Date().toISOString(), type: "active_window.changed", detail: { process: "Code.exe", title: "RemoteCtrl" } }] };
   return { status: "queued", approval_required: true };
 }
