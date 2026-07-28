@@ -3,7 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event"
 import { getAllWebviewWindows, getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow"
 import { open } from "@tauri-apps/plugin-dialog"
 import {
-  Activity, ChevronRight, CirclePause, FolderOpen, HardDrive, Info,
+  Activity, ChevronRight, FolderOpen, HardDrive, Info,
   LaptopMinimal, LoaderCircle, Moon, PanelLeft, Power, RefreshCw, ShieldCheck,
   Sun, Unplug, Wifi, XCircle,
 } from "lucide-react"
@@ -61,6 +61,15 @@ function statusKind(status: string) {
   return "offline"
 }
 
+function compactStatus(status: string) {
+  const value = status.toLowerCase()
+  if (value.startsWith("connected")) return "Connected"
+  if (value.startsWith("connecting")) return "Connecting"
+  if (value.startsWith("paused")) return "Paused"
+  if (value.startsWith("disconnected")) return "Disconnected"
+  return "Not connected"
+}
+
 function StatusPill({ status }: { status: string }) {
   const kind = statusKind(status)
   const styles = {
@@ -70,7 +79,7 @@ function StatusPill({ status }: { status: string }) {
     offline: "border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300",
   }
   const dot = { online: "bg-emerald-500", paused: "bg-amber-500", connecting: "bg-blue-500", offline: "bg-rose-500" }
-  return <Badge variant="outline" className={`h-7 gap-2 px-2.5 font-medium ${styles[kind]}`}><span className={`size-2 rounded-full ${dot[kind]}`} />{status}</Badge>
+  return <Badge variant="outline" className={`h-7 gap-2 px-2.5 font-medium ${styles[kind]}`}><span className={`size-2 rounded-full ${dot[kind]}`} /><span title={status}>{compactStatus(status)}</span></Badge>
 }
 
 function SessionCard({ label, active, icon: Icon, description }: { label: string; active: boolean; icon: typeof LaptopMinimal; description: string }) {
@@ -164,7 +173,7 @@ function AgentConsole() {
 
   const isEnrolled = Boolean(state.config.agent_id || state.config.enrolled)
   const content = {
-    overview: <Overview state={state} ready={ready} onConnect={() => call("agent.connect")} onPause={() => call("agent.pause_toggle")} />,
+    overview: <Overview state={state} ready={ready} onConnect={() => call("agent.connect")} onDisconnect={() => call("agent.disconnect").then(() => toast.success("Disconnected from gateway"))} />,
     privacy: <Privacy state={state} onChooseFolder={chooseFolder} onRemove={(path) => call("agent.remove_allowed_folder", { path })} onReset={() => call("agent.reset_approvals").then(() => toast.success("Session approvals reset"))} onPower={(enabled) => call("agent.power_mode", { enabled })} />,
     activity: <ActivityPage state={state} onConnect={() => call("agent.connect")} />,
     settings: <Settings gateway={gateway} agentName={agentName} token={token} enrolled={isEnrolled} onGateway={setGateway} onName={setAgentName} onToken={setToken} onSave={() => call("agent.update_config", { server_url: gateway, agent_name: agentName })} onEnroll={() => call("agent.update_config", { server_url: gateway, agent_name: agentName }).then(() => call("agent.enroll", { enrollment_token: token })).then(() => { setToken(""); setPage("overview"); toast.success("Device enrolled") })} />,
@@ -182,8 +191,8 @@ function AgentConsole() {
   </SidebarProvider><Toaster position="bottom-right" richColors closeButton /></TooltipProvider>
 }
 
-function Overview({ state, ready, onConnect, onPause }: { state: AgentState; ready: boolean; onConnect: () => void; onPause: () => void }) {
-  return <div className="space-y-6"><section className="flex flex-wrap items-start justify-between gap-5"><div><p className="text-xs font-semibold tracking-wide text-primary">WINDOWS ENDPOINT</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">{state.config.agent_name}</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">{state.config.server_url || "Gateway is not configured"}</p></div><div className="flex flex-wrap gap-2"><Dialog><DialogTrigger asChild><Button variant="outline"><Info />Privacy model</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Consent-first by design</DialogTitle><DialogDescription>Protected dashboard requests are presented to this Windows user. “Allow for this session” is temporary and resets on disconnect, restart, or a local reset.</DialogDescription></DialogHeader></DialogContent></Dialog><Button variant="outline" onClick={onPause}><CirclePause />{state.config.paused ? "Resume agent" : "Pause agent"}</Button><Button onClick={onConnect} disabled={!ready}><Wifi />{ready ? "Reconnect" : "Preparing Agent"}</Button></div></section>
+function Overview({ state, ready, onConnect, onDisconnect }: { state: AgentState; ready: boolean; onConnect: () => void; onDisconnect: () => void }) {
+  return <div className="space-y-6"><section className="flex flex-wrap items-start justify-between gap-5"><div><p className="text-xs font-semibold tracking-wide text-primary">WINDOWS ENDPOINT</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">{state.config.agent_name}</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">{state.config.server_url || "Gateway is not configured"}</p></div><div className="flex flex-wrap gap-2"><Dialog><DialogTrigger asChild><Button variant="outline"><Info />Privacy model</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Consent-first by design</DialogTitle><DialogDescription>Protected dashboard requests are presented to this Windows user. “Allow for this session” is temporary and resets on disconnect, restart, or a local reset.</DialogDescription></DialogHeader></DialogContent></Dialog><Button variant="outline" className="text-destructive hover:text-destructive" onClick={onDisconnect} disabled={!ready || statusKind(state.status) === "offline"}><Unplug />Disconnect</Button><Button onClick={onConnect} disabled={!ready}><Wifi />{ready ? "Reconnect" : "Preparing Agent"}</Button></div></section>
     <Card className="rounded-lg border-primary/15 bg-primary/[0.035] shadow-none"><CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-4"><div className="flex items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><LaptopMinimal className="size-5" /></div><div><p className="font-semibold">Endpoint identity</p><p className="text-xs text-muted-foreground">{state.config.agent_id ? `Agent ID: ${state.config.agent_id}` : "This device has not been enrolled"}</p></div></div><div className="h-8 border-l border-border" /><p className="text-sm text-muted-foreground">Every remote action is shown to the person using this Windows device.</p></CardContent></Card>
     <section><div className="mb-3 flex items-end justify-between"><div><h2 className="text-base font-semibold">Sensitive sessions</h2><p className="text-sm text-muted-foreground">Local indicators stay visible while a session is active.</p></div><Badge variant="outline" className="font-medium">{[state.sessions.screen, state.sessions.webcam, state.sessions.activity].filter(Boolean).length} active</Badge></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><SessionCard label="Screen" active={state.sessions.screen} icon={LaptopMinimal} description="Screen viewing is idle" /><SessionCard label="Webcam" active={state.sessions.webcam} icon={Wifi} description="Camera sharing is idle" /><SessionCard label="Activity Capture" active={state.sessions.activity} icon={Activity} description="Activity capture is idle" /></div></section>
   </div>
@@ -208,7 +217,15 @@ function Settings({ gateway, agentName, token, enrolled, onGateway, onName, onTo
 async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, applyState: (state: unknown) => void, webcam: LocalWebcam) {
   if (message.type === "event") {
     if (message.event === "agent.ready") applyState(message.data?.state)
-    if (message.event === "agent.status") applyState(message.data?.state)
+    if (message.event === "agent.status") {
+      applyState(message.data?.state)
+      const status = String(message.data?.status ?? "")
+      if (status.toLowerCase().startsWith("disconnected:")) {
+        toast.error("Gateway connection failed", { id: "gateway-connection", description: status.replace(/^Disconnected:\s*/i, "") })
+      } else if (status.toLowerCase().startsWith("connected")) {
+        toast.dismiss("gateway-connection")
+      }
+    }
     if (message.event === "agent.config") applyState(message.data?.state)
     if (message.event === "agent.session_state") applyState(message.data?.state)
     if (message.event === "activity.started") await openActivityWindow()

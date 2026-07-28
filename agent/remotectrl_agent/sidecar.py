@@ -186,13 +186,27 @@ class AgentSidecar:
             self._log("Device enrolled and connection started")
             return self.state()
         if method == "agent.connect":
+            self.config.paused = False
+            save_config(self.config)
             self.client.start()
+            self.status = "Connecting"
             self._log("Connection requested")
+            self.bridge.event("agent.status", {"status": self.status, "state": self.state()})
+            return self.state()
+        if method == "agent.disconnect":
+            self.config.paused = True
+            save_config(self.config)
+            self.client.stop()
+            self.status = "Disconnected by local user"
+            self._log("Disconnected from gateway by local user")
+            self.bridge.event("agent.status", {"status": self.status, "state": self.state()})
             return self.state()
         if method == "agent.pause_toggle":
             self.config.paused = not self.config.paused
             save_config(self.config)
-            if not self.config.paused:
+            if self.config.paused:
+                self.client.stop()
+            else:
                 self.client.start()
             self.status = "Paused" if self.config.paused else "Connecting"
             self.bridge.event("agent.status", {"status": self.status, "state": self.state()})

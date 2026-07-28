@@ -84,3 +84,18 @@ def test_session_state_event_reflects_running_webcam():
     name, payload = bridge.events[-1]
     assert name == "agent.session_state"
     assert payload["state"]["sessions"]["webcam"] is True
+
+def test_local_disconnect_stops_gateway_connection_and_persists_pause(monkeypatch):
+    import remotectrl_agent.sidecar as sidecar_module
+
+    monkeypatch.setattr(sidecar_module, "save_config", lambda _config: None)
+    config = AgentConfig(agent_id="agent-1", agent_token="saved-token", paused=False)
+    app = AgentSidecar(FakeBridge(), config)
+    stopped: list[bool] = []
+    monkeypatch.setattr(app.client, "stop", lambda: stopped.append(True))
+
+    state = app.dispatch("agent.disconnect", {})
+
+    assert stopped == [True]
+    assert config.paused is True
+    assert state["status"] == "Disconnected by local user"

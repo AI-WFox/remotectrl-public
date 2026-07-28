@@ -84,13 +84,24 @@ class AgentClient:
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
-            return
+            if not self.stop_event.is_set():
+                return
+            self.thread.join(timeout=2)
+            if self.thread.is_alive():
+                return
         self.stop_event.clear()
         self.thread = threading.Thread(target=self._run_forever, daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
+        with self.state_lock:
+            ws = self.active_ws
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
     def _run_forever(self) -> None:
         while not self.stop_event.is_set():
@@ -105,8 +116,10 @@ class AgentClient:
             try:
                 self._connect_once()
             except Exception as exc:
+                if self.stop_event.is_set() or self.config.paused:
+                    break
                 self.on_status(f"Disconnected: {exc}")
-                time.sleep(3)
+                self.stop_event.wait(3)
 
     def _connect_once(self) -> None:
         ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent?token={self.config.agent_token}"
