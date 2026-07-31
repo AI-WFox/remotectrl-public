@@ -66,6 +66,8 @@ type StreamFrameMap = Record<string, StreamFrame>;
 type StreamStatsMap = Record<string, StreamStats>;
 type ActivityEvent = { time: string; type: string; detail: Record<string, unknown> };
 type ActivityEventMap = Record<string, ActivityEvent[]>;
+type AgentSessionState = { screen: boolean; webcam: boolean; activity: boolean; keycapture: boolean };
+type AgentSessionStateMap = Record<string, AgentSessionState>;
 type AppStartMode = "focus_existing" | "new_instance";
 
 const emptyStreamStats: StreamStats = { status: "idle", fps: 0, frames: 0, latencyMs: 0 };
@@ -91,6 +93,7 @@ export function App() {
   const [streamFrames, setStreamFrames] = useState<StreamFrameMap>({});
   const [streamStats, setStreamStats] = useState<StreamStatsMap>({});
   const [activityEvents, setActivityEvents] = useState<ActivityEventMap>({});
+  const [agentSessionStates, setAgentSessionStates] = useState<AgentSessionStateMap>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
   const selectedAgentIdRef = useRef(selectedAgentId);
   const manualAgentSelectionRef = useRef(false);
@@ -98,12 +101,7 @@ export function App() {
   const downloadedCommandIds = useRef<Set<string>>(new Set());
   const exportedActivityCommandIds = useRef<Set<string>>(new Set());
   const downloadEffectsReady = useRef(false);
-  const keycaptureActive = useMemo(() => {
-    const latestStateCommand = commands.find(
-      (command) => command.agent_id === selectedAgent?.id && ["activity.start", "activity.stop", "keycapture.start", "keycapture.stop"].includes(command.type) && command.status === "succeeded",
-    );
-    return latestStateCommand?.type === "activity.start" || latestStateCommand?.type === "keycapture.start";
-  }, [commands, selectedAgent?.id]);
+  const keycaptureActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -159,6 +157,42 @@ export function App() {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+        if (message.type === "agent.session_snapshot" && message.sessions && typeof message.sessions === "object") {
+          const snapshot = message.sessions as Record<string, Record<string, unknown>>;
+          const next: AgentSessionStateMap = {};
+          for (const [agentId, sessions] of Object.entries(snapshot)) next[agentId] = { screen: Boolean(sessions.screen), webcam: Boolean(sessions.webcam), activity: Boolean(sessions.activity), keycapture: Boolean(sessions.keycapture) };
+          setAgentSessionStates(next);
+          return;
+        }
+        if (message.type === "agent.session_state" && message.sessions && typeof message.sessions === "object") {
+          const agentId = String(message.agent_id ?? "");
+          if (!agentId) return;
+          const source = message.sessions as Record<string, unknown>;
+          setAgentSessionStates((current) => ({
+            ...current,
+            [agentId]: { screen: Boolean(source.screen), webcam: Boolean(source.webcam), activity: Boolean(source.activity), keycapture: Boolean(source.keycapture) },
+          }));
+          return;
+        }
+        if (message.type === "agent.metadata" && message.agent && typeof message.agent === "object") {
+          const updated = message.agent as Agent;
+          setAgents((current) => current.map((agent) => agent.id === updated.id ? { ...agent, ...updated } : agent));
+          return;
+        }
+        if (message.type === "agent.config_invalidated") {
+          const agentId = String(message.agent_id ?? "");
+          setModuleResultCache((current) => {
+            const next = { ...current };
+            delete next[moduleCacheKey(agentId, "files")];
+            return next;
+          });
+          if (agentId === selectedAgentIdRef.current) setNotice("Allowed folders changed on the Agent. Choose a folder again.");
+          return;
+        }
+        if (message.type === "agent.command_error") {
+          if (String(message.agent_id ?? "") === selectedAgentIdRef.current) setNotice(`${String(message.command_type ?? "Remote action")} failed: ${String(message.error ?? "Unknown error")}`);
+          return;
+        }
         if (message.type === "activity.event" && message.event && typeof message.event === "object") {
           const agentId = String(message.agent_id ?? "")
           if (!agentId) return
@@ -262,6 +296,7 @@ export function App() {
     setStreamFrames({});
     setStreamStats({});
     setActivityEvents({});
+    setAgentSessionStates({});
     downloadedCommandIds.current.clear();
     exportedActivityCommandIds.current.clear();
     downloadEffectsReady.current = false;
@@ -1037,15 +1072,14 @@ function FileBreadcrumb({ path, rootPath, runCommand }: { path: string; rootPath
 
 function buildPathBreadcrumb(rawPath: string, rootPath?: string): { label: string; path: string }[] {
   const normalized = normalizeWindowsPath(rawPath);
-  const normalizedRoot = rootPath ? normalizeWindowsPath(rootPath) : "";
-  const effectiveRoot = normalizedRoot && isPathInsideRoot(normalized, normalizedRoot) ? normalizedRoot : normalized;
-  const rootParts = splitWindowsPath(effectiveRoot);
+  const normalizedRoot = rootPath ? normalizeWindowsPath(rootPath) : normalized;
+  if (!normalizedRoot || !isPathInsideRoot(normalized, normalizedRoot)) return [{ label: "Allowed folders", path: normalized }];
+  const rootParts = splitWindowsPath(normalizedRoot);
   const currentParts = splitWindowsPath(normalized);
-  if (!rootParts.length) return [{ label: normalized, path: normalized }];
-  const parts: { label: string; path: string }[] = [];
-  for (let index = rootParts.length - 1; index < currentParts.length; index += 1) {
-    const path = joinWindowsParts(currentParts.slice(0, index + 1));
-    parts.push({ label: currentParts[index], path });
+  const rootLabel = rootParts[rootParts.length - 1] || normalizedRoot;
+  const parts: { label: string; path: string }[] = [{ label: "Allowed folders", path: normalizedRoot }, { label: rootLabel, path: normalizedRoot }];
+  for (let index = rootParts.length; index < currentParts.length; index += 1) {
+    parts.push({ label: currentParts[index], path: joinWindowsParts(currentParts.slice(0, index + 1)) });
   }
   return parts;
 }

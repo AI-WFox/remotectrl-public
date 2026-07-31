@@ -8,6 +8,7 @@ class SessionManager:
     def __init__(self) -> None:
         self.agent_sockets: dict[str, WebSocket] = {}
         self.dashboard_sockets: set[WebSocket] = set()
+        self.agent_sessions: dict[str, dict[str, bool]] = {}
 
     async def connect_agent(self, agent_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -42,6 +43,14 @@ class SessionManager:
     def disconnect_dashboard(self, websocket: WebSocket) -> None:
         self.dashboard_sockets.discard(websocket)
 
+    def set_agent_sessions(self, agent_id: str, sessions: dict[str, bool]) -> None:
+        self.agent_sessions[agent_id] = {key: bool(sessions.get(key)) for key in ("screen", "webcam", "activity", "keycapture")}
+
+    def clear_agent_sessions(self, agent_id: str) -> None:
+        self.agent_sessions[agent_id] = {"screen": False, "webcam": False, "activity": False, "keycapture": False}
+
+    def session_snapshot(self) -> dict[str, dict[str, bool]]:
+        return dict(self.agent_sessions)
     def is_agent_online(self, agent_id: str) -> bool:
         return agent_id in self.agent_sockets
 

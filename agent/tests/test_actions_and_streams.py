@@ -256,7 +256,7 @@ def test_files_roots_and_empty_files_list_do_not_open_default_folder(tmp_path: P
 
 
 
-def test_session_cached_approval_covers_matching_session_stop():
+def test_session_cached_approval_does_not_cover_different_session_action():
     class FakeHandlers:
         def handle(self, command_type, payload):
             return {"status": "ok"}
@@ -293,8 +293,8 @@ def test_session_cached_approval_covers_matching_session_stop():
     )
 
     approvals = [message for message in ws.messages if message["type"] == "approval_response"]
-    assert approval_calls == ["activity.start"]
-    assert approvals[-1]["approval_mode"] == "session_cached"
+    assert approval_calls == ["activity.start", "activity.stop"]
+    assert approvals[-1]["approval_mode"] == "prompt_once"
     assert approvals[-1]["policy_scope"] == "current_session"
 
 
@@ -386,7 +386,7 @@ def test_webview2_webcam_forwards_frames_without_opencv():
     assert ws.messages[1]["frame"] == "ZmFrZS1mcmFtZQ=="
     assert ws.messages[-1]["ok"] is True
 
-def test_capture_still_keeps_agent_windows_hidden_while_screen_live():
+def test_capture_still_hides_only_pending_approval_windows():
     class FakeHandlers:
         def __init__(self):
             self.payloads = []
@@ -412,6 +412,6 @@ def test_capture_still_keeps_agent_windows_hidden_while_screen_live():
         },
     )
 
-    assert handlers.payloads == [("screen.screenshot", {"quality": 85, "_screen_hidden": True})]
+    assert handlers.payloads == [("screen.screenshot", {"quality": 85, "_hide_approval_windows": True})]
     assert ws.messages[-1]["type"] == "command_result"
     assert ws.messages[-1]["ok"] is True

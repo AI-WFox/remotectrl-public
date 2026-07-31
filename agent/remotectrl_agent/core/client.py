@@ -20,6 +20,7 @@ StatusCallback = Callable[[str], None]
 ApprovalCallback = Callable[[dict], dict[str, Any] | bool]
 WebcamCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 SessionCallback = Callable[[], None]
+CommandErrorCallback = Callable[[str, str], None]
 
 
 class AgentClient:
@@ -31,6 +32,7 @@ class AgentClient:
         request_approval: ApprovalCallback,
         webcam_provider: WebcamCallback | None = None,
         on_session_change: SessionCallback | None = None,
+        on_command_error: CommandErrorCallback | None = None,
     ) -> None:
         self.config = config
         self.handlers = handlers
@@ -38,6 +40,7 @@ class AgentClient:
         self.request_approval = request_approval
         self.webcam_provider = webcam_provider
         self.on_session_change = on_session_change
+        self.on_command_error = on_command_error
         self.webcam_stream: dict[str, Any] | None = None
         self.active_ws: Any | None = None
         self.outbox: queue.Queue[dict] = queue.Queue()
@@ -104,22 +107,18 @@ class AgentClient:
                 pass
 
     def _run_forever(self) -> None:
-        while not self.stop_event.is_set():
-            if self.config.paused:
-                self.on_status("Paused")
-                time.sleep(2)
-                continue
-            if not self.config.agent_token:
-                self.on_status("Not enrolled")
-                time.sleep(2)
-                continue
-            try:
-                self._connect_once()
-            except Exception as exc:
-                if self.stop_event.is_set() or self.config.paused:
-                    break
+        """Make one local-user initiated connection attempt; never retry in the background."""
+        if self.config.paused:
+            self.on_status("Paused")
+            return
+        if not self.config.agent_token:
+            self.on_status("Not enrolled")
+            return
+        try:
+            self._connect_once()
+        except Exception as exc:
+            if not self.stop_event.is_set() and not self.config.paused:
                 self.on_status(f"Disconnected: {exc}")
-                self.stop_event.wait(3)
 
     def _connect_once(self) -> None:
         ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent?token={self.config.agent_token}"
@@ -145,6 +144,14 @@ class AgentClient:
                 threading.Thread(target=self._handle_message, args=(ws, json.loads(raw)), daemon=True).start()
         finally:
             self._stop_all_streams()
+            # Local-visible capture must never continue after the authenticated gateway session ends.
+            try:
+                if self.activity_active:
+                    self.handlers.handle("activity.stop", {})
+                if self.keycapture_active:
+                    self.handlers.handle("keycapture.stop", {})
+            except Exception:
+                pass
             with self.state_lock:
                 self.active_ws = None
                 self.session_approvals.clear()
@@ -152,6 +159,8 @@ class AgentClient:
                 self.activity_active = False
             self._notify_session_change()
             ws.close()
+            if not self.stop_event.is_set() and not self.config.paused:
+                self.on_status("Disconnected: gateway connection closed")
 
     def publish_activity_event(self, event: dict[str, Any]) -> bool:
         """Relay visible-session activity to the authenticated dashboard in real time."""
@@ -210,10 +219,9 @@ class AgentClient:
             if command_type in {"webcam.list", "webcam.snapshot"}:
                 payload_result = self._webcam_request("list" if command_type == "webcam.list" else "snapshot", payload)
             elif command_type == "screen.screenshot":
-                # A live screen session already hides Agent windows. Keep that state while taking a still.
+                # Still captures hide pending approval windows only; the Agent main window stays visible.
                 screenshot_payload = dict(payload)
-                if self._stream_active("screen.live.start"):
-                    screenshot_payload["_screen_hidden"] = True
+                screenshot_payload["_hide_approval_windows"] = True
                 payload_result = self.handlers.handle(command_type, screenshot_payload)
             else:
                 payload_result = self.handlers.handle(command_type, payload)
@@ -233,7 +241,10 @@ class AgentClient:
                 self._notify_session_change()
             self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
-            self._send(ws, result(command_id, agent_id, False, error=str(exc)))
+            error = str(exc)
+            self._report_command_error(command_type, error)
+            self._send(ws, {"type": "agent_command_error", "agent_id": agent_id, "command_type": command_type, "error": error})
+            self._send(ws, result(command_id, agent_id, False, error=error))
 
 
     def _notify_session_change(self) -> None:
@@ -268,19 +279,27 @@ class AgentClient:
         }
 
     def _approval_family(self, command_type: str) -> str:
-        paired_session_actions = {
-            "screen.live.start": "screen.live",
-            "screen.live.stop": "screen.live",
-            "webcam.live.start": "webcam.live",
-            "webcam.live.stop": "webcam.live",
-            "activity.start": "activity.session",
-            "activity.stop": "activity.session",
-            "keycapture.start": "keycapture.session",
-            "keycapture.stop": "keycapture.session",
-        }
-        if command_type in paired_session_actions:
-            return paired_session_actions[command_type]
+        # Session grants are intentionally command-specific: starting a stream never grants stopping it.
         return command_type
+
+    def publish_agent_event(self, event_type: str, payload: dict[str, Any] | None = None) -> bool:
+        with self.state_lock:
+            ws = self.active_ws
+            agent_id = self.config.agent_id
+        if not ws or not agent_id:
+            return False
+        try:
+            self._send(ws, {"type": event_type, "agent_id": agent_id, **(payload or {})})
+            return True
+        except Exception:
+            return False
+
+    def _report_command_error(self, command_type: str, error: str) -> None:
+        if self.on_command_error:
+            try:
+                self.on_command_error(command_type, error)
+            except Exception:
+                pass
     def _stream_name(self, command_type: str) -> str:
         return "screen" if command_type.startswith("screen.") else "webcam"
 
@@ -377,6 +396,7 @@ class AgentClient:
         self._notify_session_change()
         if not stream:
             return
+        self._report_command_error("webcam.live.start", error)
         self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "failed", "fps": stream["fps"], "error": error})
         self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], False, error=error))
     def _stop_tauri_webcam(self) -> dict[str, Any]:
@@ -398,8 +418,8 @@ class AgentClient:
         frame_count = 0
         started = time.time()
         stream_payload = dict(payload)
-        stream_payload["_screen_hidden"] = True
-        self._notify_handler_provider("screen_capture_hide")
+        # Live screen sharing leaves the main Agent window visible by design.
+        stream_payload["_hide_approval_windows"] = False
         self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "running", "fps": fps})
         try:
             while not stop_stream.is_set() and not self.stop_event.is_set():
@@ -437,13 +457,14 @@ class AgentClient:
                 )
             )
         except Exception as exc:
+            error = str(exc)
+            self._report_command_error(command_type, error)
             self._send(
                 ws,
-                {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "failed", "fps": fps, "error": str(exc)},
+                {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "failed", "fps": fps, "error": error},
             )
-            self._send(ws, result(command_id, agent_id, False, error=str(exc)))
+            self._send(ws, result(command_id, agent_id, False, error=error))
         finally:
-            self._notify_handler_provider("screen_capture_restore")
             with self.state_lock:
                 self.active_streams.pop(stream, None)
             self._notify_session_change()

@@ -264,9 +264,9 @@ class CommandHandlers:
         from PIL import ImageGrab
 
         quality = min(max(int(payload.get("quality", 75)), 35), 90)
-        restore_after = not payload.get("_screen_hidden")
-        if restore_after:
-            self.keycapture_provider("screen_capture_hide")
+        hide_approval_windows = bool(payload.get("_hide_approval_windows"))
+        if hide_approval_windows:
+            self.keycapture_provider("screen_capture_hide_approval")
         try:
             image = ImageGrab.grab()
             buf = io.BytesIO()
@@ -278,8 +278,8 @@ class CommandHandlers:
                 "height": image.height,
             }
         finally:
-            if restore_after:
-                self.keycapture_provider("screen_capture_restore")
+            if hide_approval_windows:
+                self.keycapture_provider("screen_capture_restore_approval")
 
     def files_roots(self, _payload: dict[str, Any]) -> dict[str, Any]:
         roots = []
@@ -397,9 +397,13 @@ class CommandHandlers:
 
     def _power(self, args: list[str], action: str) -> dict[str, Any]:
         if self.config.dry_run_power:
-            return {"action": action, "status": "dry_run", "message": "Real power actions are disabled on the Agent."}
-        subprocess.Popen(args)
-        return {"action": action, "status": "requested", "message": f"{action} requested on the Agent."}
+            return {"action": action, "status": "dry_run", "power_mode": "dry_run", "message": "Real power actions are disabled on the Agent."}
+        try:
+            # shell=False preserves the explicit Windows invocation and avoids command-shell injection.
+            subprocess.Popen(args)
+        except OSError as exc:
+            raise RuntimeError(f"Windows could not request {action}: {exc}") from exc
+        return {"action": action, "status": "requested", "power_mode": "real", "message": f"{action} was requested on the Agent."}
 
     def _resolve_app_path(self, payload: dict[str, Any]) -> str:
         preset = str(payload.get("preset", "")).strip().lower()

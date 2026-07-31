@@ -66,15 +66,14 @@ class AgentSidecar:
         self.logs: list[dict[str, str]] = []
         self.activity = ActivityCapture(self._activity_event)
         self.handlers = CommandHandlers(self.config, self._provider)
-        self.client = AgentClient(self.config, self.handlers, self._on_status, self._approval, self._webcam_request, self._on_session_change)
+        self.client = AgentClient(self.config, self.handlers, self._on_status, self._approval, self._webcam_request, self._on_session_change, self._on_command_error)
         self._last_session_signature: tuple[bool, bool, bool, bool] | None = None
         if hasattr(self.bridge, "closed"):
             threading.Thread(target=self._monitor_sessions, daemon=True).start()
 
     def start_saved_connection(self) -> None:
-        if self.config.agent_token and not self.config.paused:
-            self.client.start()
-            self._log("Restored saved enrollment and started connection")
+        if self.config.agent_token:
+            self._log("Saved enrollment is ready. Click Connect when you want this device online.")
 
     def _log(self, message: str, level: str = "info") -> None:
         entry = {"message": message, "level": level}
@@ -84,7 +83,14 @@ class AgentSidecar:
     def _on_status(self, status: str) -> None:
         self.status = status
         self._log(status, "error" if status.lower().startswith("disconnected") else "info")
+        if status == "Connected":
+            self.client.publish_agent_event("agent_metadata", {"name": self.config.agent_name})
         self.bridge.event("agent.status", {"status": status, "state": self.state()})
+
+    def _on_command_error(self, command_type: str, error: str) -> None:
+        safe_error = str(error)[:500]
+        self._log(f"{command_type} failed: {safe_error}", "error")
+        self.bridge.event("agent.command_error", {"command_type": command_type, "error": safe_error})
 
     def _on_session_change(self) -> None:
         self._emit_session_state(force=True)
@@ -93,7 +99,7 @@ class AgentSidecar:
         while not self.bridge.closed.wait(0.5):
             self._emit_session_state()
 
-    def _emit_session_state(self, force: bool = False) -> None:
+    def _emit_session_state(self, force: bool = False, source: str = "remote") -> None:
         state = self.state()
         sessions = state["sessions"]
         signature = (bool(sessions["screen"]), bool(sessions["webcam"]), bool(sessions["activity"]), bool(sessions["keycapture"]))
@@ -101,6 +107,7 @@ class AgentSidecar:
             return
         self._last_session_signature = signature
         self.bridge.event("agent.session_state", {"state": state})
+        self.client.publish_agent_event("agent_session_state", {"sessions": sessions, "source": source})
     def _activity_event(self, _event: str, data: dict[str, Any]) -> None:
         # Detailed events belong to the selected Web dashboard, not the Agent console.
         self.client.publish_activity_event(data)
@@ -121,11 +128,11 @@ class AgentSidecar:
             return {"error": "The local camera service did not respond. Keep RemoteCtrl Agent open and try again."}
         return response
     def _provider(self, action: str) -> Any:
-        if action == "screen_capture_hide":
-            self.bridge.request_ui("capture.hide_windows", {}, timeout=5)
+        if action == "screen_capture_hide_approval":
+            self.bridge.request_ui("capture.hide_approval_windows", {}, timeout=5)
             return "hidden"
-        if action == "screen_capture_restore":
-            self.bridge.request_ui("capture.restore_windows", {}, timeout=5)
+        if action == "screen_capture_restore_approval":
+            self.bridge.request_ui("capture.restore_approval_windows", {}, timeout=5)
             return "restored"
         if action == "start":
             self.bridge.event("keycapture.started", {})
@@ -170,11 +177,15 @@ class AgentSidecar:
         if method == "agent.get_state":
             return self.state()
         if method == "agent.update_config":
+            previous_name = self.config.agent_name
             for key in ("server_url", "agent_name", "ui_theme"):
                 value = params.get(key)
                 if isinstance(value, str) and value.strip():
                     setattr(self.config, key, value.strip())
             save_config(self.config)
+            if self.config.agent_name != previous_name:
+                self.client.publish_agent_event("agent_metadata", {"name": self.config.agent_name})
+                self._log("Agent name updated")
             self.bridge.event("agent.config", {"config": self._public_config(), "state": self.state()})
             return self.state()
         if method == "agent.enroll":
@@ -182,8 +193,7 @@ class AgentSidecar:
             if not token:
                 raise ValueError("Enrollment token is required")
             self.client.enroll(token)
-            self.client.start()
-            self._log("Device enrolled and connection started")
+            self._log("Device enrolled. Click Connect to take it online.")
             return self.state()
         if method == "agent.connect":
             self.config.paused = False
@@ -229,6 +239,8 @@ class AgentSidecar:
             self.config.allowed_folders = [item for item in self.config.allowed_folders if item != folder]
             save_config(self.config)
             self.bridge.event("agent.config", {"config": self._public_config(), "state": self.state()})
+            self.client.publish_agent_event("agent_config_invalidated", {"kind": "allowed_folders"})
+            self._log("Allowed folders changed")
             return self.state()
         if method == "agent.power_mode":
             self.config.dry_run_power = not bool(params.get("enabled"))
@@ -252,6 +264,7 @@ class AgentSidecar:
             status = self.activity.stop()
             self.client.activity_active = False
             self.bridge.event("activity.stopped", {"status": status, "local": True})
+            self._emit_session_state(force=True, source="local")
             self._log("Activity capture stopped locally")
             return self.state()
         if method == "agent.shutdown":

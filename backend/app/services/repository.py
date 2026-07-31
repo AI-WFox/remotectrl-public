@@ -154,6 +154,16 @@ class Repository:
                 (status, ip_address, now_iso(), agent_id),
             )
 
+    def update_agent_name(self, agent_id: str, name: str) -> dict[str, Any]:
+        normalized = name.strip()
+        if not normalized or len(normalized) > 128:
+            raise ValueError("Agent name must contain 1 to 128 characters")
+        with session(self.database_path) as conn:
+            conn.execute("UPDATE agents SET name=? WHERE id=?", (normalized, agent_id))
+        agent = self.get_agent(agent_id)
+        if not agent:
+            raise KeyError(agent_id)
+        return agent
     def list_agents(self) -> list[dict[str, Any]]:
         with session(self.database_path) as conn:
             rows = conn.execute("SELECT * FROM agents ORDER BY created_at DESC").fetchall()

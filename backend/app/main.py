@@ -263,6 +263,7 @@ async def dashboard_ws(websocket: WebSocket) -> None:
     await manager.connect_dashboard(websocket)
     try:
         await websocket.send_json({"type": "hello", "role": "dashboard"})
+        await websocket.send_json({"type": "agent.session_snapshot", "sessions": manager.session_snapshot()})
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
@@ -291,6 +292,7 @@ async def agent_ws(websocket: WebSocket) -> None:
     finally:
         disconnected_current_socket = manager.disconnect_agent(agent["id"], websocket)
         if disconnected_current_socket and repo.get_agent(agent["id"]):
+            manager.clear_agent_sessions(agent["id"])
             repo.set_agent_status(agent["id"], "offline")
             repo.audit("agent", "agent.disconnected", agent_id=agent["id"])
             await manager.broadcast_dashboard({"type": "agent.offline", "agent_id": agent["id"]})
@@ -299,6 +301,38 @@ async def agent_ws(websocket: WebSocket) -> None:
 async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -> None:
     message_type = message.get("type")
     command_id = message.get("command_id")
+    if message_type == "agent_metadata":
+        name = str(message.get("name") or "").strip()
+        if not name:
+            return
+        try:
+            agent = repo.update_agent_name(agent_id, name)
+        except (KeyError, ValueError):
+            return
+        repo.audit("agent", "agent.metadata.updated", agent_id, detail={"name": agent["name"]})
+        await manager.broadcast_dashboard({"type": "agent.metadata", "agent": agent})
+        return
+    if message_type == "agent_session_state":
+        raw_sessions = message.get("sessions")
+        if not isinstance(raw_sessions, dict):
+            return
+        sessions = {key: bool(raw_sessions.get(key)) for key in ("screen", "webcam", "activity", "keycapture")}
+        source = str(message.get("source") or "remote")
+        manager.set_agent_sessions(agent_id, sessions)
+        repo.audit("agent", "agent.session_state", agent_id, detail={"sessions": sessions, "source": source})
+        await manager.broadcast_dashboard({"type": "agent.session_state", "agent_id": agent_id, "sessions": sessions, "source": source})
+        return
+    if message_type == "agent_config_invalidated":
+        kind = str(message.get("kind") or "config")
+        repo.audit("agent", "agent.config_invalidated", agent_id, detail={"kind": kind})
+        await manager.broadcast_dashboard({"type": "agent.config_invalidated", "agent_id": agent_id, "kind": kind})
+        return
+    if message_type == "agent_command_error":
+        command_type = str(message.get("command_type") or "unknown")
+        error = str(message.get("error") or "Command failed")[:500]
+        repo.audit("agent", "agent.command_error", agent_id, command_id, {"command_type": command_type, "error": error})
+        await manager.broadcast_dashboard({"type": "agent.command_error", "agent_id": agent_id, "command_type": command_type, "error": error})
+        return
     if message_type == "approval_response":
         if not command_id:
             return
@@ -317,7 +351,11 @@ async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -
             result=message.get("payload") if ok else None,
             error=message.get("error"),
         )
-        repo.audit("agent", "command.result", agent_id, command_id, {"ok": ok})
+        result_payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
+        audit_detail = {"ok": ok}
+        if command and str(command.get("type") or "").startswith("power."):
+            audit_detail.update({"action": result_payload.get("action"), "power_mode": result_payload.get("power_mode") or result_payload.get("status")})
+        repo.audit("agent", "command.result", agent_id, command_id, audit_detail)
         await manager.broadcast_dashboard({"type": "command.updated", "command": command})
     elif message_type == "activity_event":
         event = message.get("event")

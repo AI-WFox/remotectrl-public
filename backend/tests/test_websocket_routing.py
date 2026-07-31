@@ -147,6 +147,7 @@ def test_activity_events_reach_dashboard_only_as_realtime_messages(tmp_path):
 
     with client.websocket_connect("/ws/dashboard") as dashboard:
         assert dashboard.receive_json()["role"] == "dashboard"
+        assert dashboard.receive_json()["type"] == "agent.session_snapshot"
         with client.websocket_connect(f"/ws/agent?token={enrolled['agent_token']}") as agent:
             agent.receive_json()
             dashboard.receive_json()  # agent.online

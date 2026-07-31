@@ -43,3 +43,5 @@ agent-desktop/src-tauri/binaries/*.exe
 # Generated release artifacts (release notes remain tracked)
 release/*.exe
 release/*.sha256
+
+*.tsbuildinfo

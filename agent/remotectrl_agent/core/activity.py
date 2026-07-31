@@ -10,15 +10,19 @@ from typing import Any, Callable
 class ActivityCapture:
     """Visible, session-scoped activity collection owned by the Agent user."""
 
+    TEXT_IDLE_SECONDS = 0.75
+
     def __init__(self, emit: Callable[[str, dict[str, Any]], None]) -> None:
         self.emit = emit
         self.events: deque[dict[str, Any]] = deque(maxlen=1000)
         self.mouse_listener = None
         self.keyboard_listener = None
-        self.timer: threading.Timer | None = None
+        self.window_timer: threading.Timer | None = None
+        self.text_timer: threading.Timer | None = None
         self.active = False
         self._modifiers: set[str] = set()
         self._typed = ""
+        self._typed_window: dict[str, Any] | None = None
         self._last_window = ""
         self._lock = threading.RLock()
 
@@ -28,6 +32,7 @@ class ActivityCapture:
                 return "already_running"
             self.active = True
             self._typed = ""
+            self._typed_window = None
             self._last_window = ""
         self._record("session.started", {})
         self._start_mouse()
@@ -36,17 +41,19 @@ class ActivityCapture:
         return "started"
 
     def stop(self) -> str:
+        self._flush_text("session_stopped")
         with self._lock:
             if not self.active:
                 return "not_running"
             self.active = False
             listeners = (self.mouse_listener, self.keyboard_listener)
             self.mouse_listener = self.keyboard_listener = None
-            timer = self.timer
-            self.timer = None
+            timers = (self.window_timer, self.text_timer)
+            self.window_timer = self.text_timer = None
             self._modifiers.clear()
-        if timer:
-            timer.cancel()
+        for timer in timers:
+            if timer:
+                timer.cancel()
         for listener in listeners:
             if listener:
                 try:
@@ -66,21 +73,61 @@ class ActivityCapture:
             self.events.append(event)
         self.emit("activity.event", event)
 
+    @staticmethod
+    def _window_signature(window: dict[str, Any]) -> str:
+        return f"{window.get('pid')}|{window.get('process')}|{window.get('title')}"
+
+    def _append_text(self, value: str, window: dict[str, Any]) -> None:
+        flush_previous = False
+        with self._lock:
+            if not self.active:
+                return
+            if self._typed and self._typed_window and self._window_signature(window) != self._window_signature(self._typed_window):
+                flush_previous = True
+        if flush_previous:
+            self._flush_text("window_changed")
+        with self._lock:
+            if not self.active:
+                return
+            self._typed += value
+            self._typed = self._typed[-160:]
+            self._typed_window = window
+            if self.text_timer:
+                self.text_timer.cancel()
+            timer = threading.Timer(self.TEXT_IDLE_SECONDS, self._flush_text, args=("idle",))
+            timer.daemon = True
+            self.text_timer = timer
+            timer.start()
+
+    def _flush_text(self, boundary: str) -> None:
+        with self._lock:
+            text = self._typed
+            window = self._typed_window
+            self._typed = ""
+            self._typed_window = None
+            timer = self.text_timer
+            self.text_timer = None
+        if timer:
+            timer.cancel()
+        if text:
+            self._record("keyboard.text", {"text": text, "window": window or {}, "boundary": boundary})
+
     def _poll_window(self) -> None:
         with self._lock:
             if not self.active:
                 return
         window = self.active_window()
-        signature = f"{window.get('process')}|{window.get('title')}"
+        signature = self._window_signature(window)
         with self._lock:
             changed = signature != self._last_window
             self._last_window = signature
         if changed:
+            self._flush_text("window_changed")
             self._record("active_window.changed", window)
         timer = threading.Timer(1.0, self._poll_window)
         timer.daemon = True
         with self._lock:
-            self.timer = timer
+            self.window_timer = timer
         timer.start()
 
     @staticmethod
@@ -108,6 +155,7 @@ class ActivityCapture:
 
         def on_click(x, y, button, pressed):
             if pressed:
+                self._flush_text("mouse_click")
                 self._record("mouse.clicked", {"x": x, "y": y, "button": str(button), "window": self.active_window()})
 
         self.mouse_listener = mouse.Listener(on_click=on_click)
@@ -138,24 +186,24 @@ class ActivityCapture:
         def on_press(key) -> None:
             modifier = modifiers.get(key)
             if modifier:
+                self._flush_text("modifier")
                 self._modifiers.add(modifier)
                 return
             value, window = label(key), self.active_window()
             if self._modifiers:
+                self._flush_text("shortcut")
                 combo = " + ".join(sorted(self._modifiers) + [value.upper() if len(value) == 1 else value])
                 self._record("keyboard.shortcut", {"keys": combo, "window": window})
             elif len(value) == 1 and ord(value) >= 32:
-                self._typed += value
-                self._record("keyboard.text", {"text": self._typed[-160:], "window": window})
+                self._append_text(value, window)
             elif value == "Space":
-                self._typed += " "
-                self._record("keyboard.text", {"text": self._typed[-160:], "window": window})
+                self._append_text(" ", window)
             elif value == "Backspace":
-                self._typed = self._typed[:-1]
-                self._record("keyboard.text", {"text": self._typed[-160:], "key": "Backspace", "window": window})
-            elif value == "Enter":
-                self._record("keyboard.key", {"key": "Enter", "text": self._typed[-160:], "window": window})
+                with self._lock:
+                    self._typed = self._typed[:-1]
+                self._record("keyboard.key", {"key": "Backspace", "window": window})
             else:
+                self._flush_text(value.lower().replace(" ", "_"))
                 self._record("keyboard.key", {"key": value, "window": window})
 
         def on_release(key) -> None:

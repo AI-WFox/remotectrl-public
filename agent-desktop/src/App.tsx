@@ -228,6 +228,7 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     }
     if (message.event === "agent.config") applyState(message.data?.state)
     if (message.event === "agent.session_state") applyState(message.data?.state)
+    if (message.event === "agent.command_error") toast.error("Remote action failed", { description: String(message.data?.error ?? "Open Activity for details.") })
     if (message.event === "activity.started") await openActivityWindow()
     return
   }
@@ -252,13 +253,15 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     await bridge.reply(message.id, response)
     return
   }
-  if (message.method === "capture.hide_windows" || message.method === "capture.restore_windows") {
-    const hide = message.method === "capture.hide_windows"
+  if (message.method === "capture.hide_approval_windows" || message.method === "capture.restore_approval_windows") {
     try {
       const windows = await getAllWebviewWindows()
-      await Promise.all(windows.map((window) => hide ? window.hide() : window.show()))
+      const approvals = windows.filter((window) => window.label.startsWith("approval-slot-"))
+      if (message.method === "capture.hide_approval_windows") await Promise.all(approvals.map((window) => window.hide()))
+      // A still capture runs after a decision. Do not resurrect resolved dialogs on restore.
       await bridge.reply(message.id, { ok: true })
     } catch { await bridge.reply(message.id, { ok: true }) }
+    return
   }
 }
 
@@ -317,14 +320,29 @@ async function openActivityWindow() {
 
 function ApprovalWindow({ requestId }: { requestId: string }) {
   const [payload, setPayload] = useState<ApprovalPayload | null>(() => { const raw = localStorage.getItem(`approval:${requestId}`); return raw ? JSON.parse(raw) as ApprovalPayload : null })
+  const resolved = useRef(false)
   useEffect(() => {
     let unlisten: (() => void) | undefined
-    listen<ApprovalPayload>("approval-data", ({ payload }) => setPayload(payload)).then((dispose) => { unlisten = dispose })
+    listen<ApprovalPayload>("approval-data", ({ payload }) => { resolved.current = false; setPayload(payload) }).then((dispose) => { unlisten = dispose })
     return () => unlisten?.()
   }, [])
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    const window = getCurrentWebviewWindow()
+    window.onCloseRequested(async (event) => {
+      if (resolved.current) return
+      event.preventDefault()
+      resolved.current = true
+      if (payload) await emit("approval-response", { id: payload.id, approved: false, approval_mode: "prompt_once", policy_scope: "single_command" })
+      await emit("approval-finished", { label: requestId })
+      await window.close()
+    }).then((dispose) => { unlisten = dispose })
+    return () => unlisten?.()
+  }, [payload, requestId])
   const message = payload?.message
   const decide = async (approved: boolean, scope: "single_command" | "current_session") => {
-    if (!payload) return
+    if (!payload || resolved.current) return
+    resolved.current = true
     await emit("approval-response", { id: payload.id, approved, approval_mode: "prompt_once", policy_scope: scope })
     await emit("approval-finished", { label: requestId })
     await getCurrentWebviewWindow().hide()
