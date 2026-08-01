@@ -23,8 +23,33 @@ def test_keyboard_text_flushes_on_mouse_click() -> None:
     emitted: list[dict] = []
     capture = ActivityCapture(lambda _event, data: emitted.append(data))
     capture.active = True
-    capture._append_text("draft", {"pid": 1, "process": "notes.exe", "title": "Notes"})
+    window = {"pid": 1, "process": "notes.exe", "title": "Notes"}
+    capture._append_text("draft", window)
     capture._flush_text("mouse_click")
 
     assert emitted[-1]["type"] == "keyboard.text"
-    assert emitted[-1]["detail"] == {"text": "draft", "window": {"pid": 1, "process": "notes.exe", "title": "Notes"}, "boundary": "mouse_click"}
+    assert emitted[-1]["detail"]["text"] == "draft"
+    assert emitted[-1]["detail"]["window"] == window
+    assert emitted[-1]["detail"]["boundary"] == "mouse_click"
+    assert isinstance(emitted[-1]["detail"]["segment_id"], str)
+
+
+def test_backspace_updates_the_current_text_segment() -> None:
+    emitted: list[dict] = []
+    capture = ActivityCapture(lambda _event, data: emitted.append(data))
+    capture.active = True
+    window = {"pid": 1, "process": "notes.exe", "title": "Notes"}
+
+    capture._append_text("xin chof", window)
+    capture._erase_text(window)
+    capture._erase_text(window)
+    capture._append_text("ào", window)
+    capture._flush_text("test_complete")
+
+    exported = capture.export()
+    assert [event["type"] for event in exported] == ["keyboard.text"]
+    assert exported[0]["detail"]["text"] == "xin chào"
+    assert not any(event["type"] == "keyboard.key" and event["detail"].get("key") == "Backspace" for event in emitted)
+    drafts = [event for event in emitted if event["type"] == "keyboard.text.draft"]
+    assert drafts[-1]["detail"]["text"] == "xin chào"
+    assert drafts[-1]["detail"]["segment_id"] == exported[0]["detail"]["segment_id"]

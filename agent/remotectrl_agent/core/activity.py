@@ -5,6 +5,7 @@ import threading
 from collections import deque
 from datetime import datetime
 from typing import Any, Callable
+from uuid import uuid4
 
 
 class ActivityCapture:
@@ -23,6 +24,7 @@ class ActivityCapture:
         self._modifiers: set[str] = set()
         self._typed = ""
         self._typed_window: dict[str, Any] | None = None
+        self._typed_segment: str | None = None
         self._last_window = ""
         self._lock = threading.RLock()
 
@@ -33,6 +35,7 @@ class ActivityCapture:
             self.active = True
             self._typed = ""
             self._typed_window = None
+            self._typed_segment = None
             self._last_window = ""
         self._record("session.started", {})
         self._start_mouse()
@@ -89,28 +92,63 @@ class ActivityCapture:
         with self._lock:
             if not self.active:
                 return
+            if not self._typed_segment:
+                self._typed_segment = str(uuid4())
             self._typed += value
             self._typed = self._typed[-160:]
             self._typed_window = window
-            if self.text_timer:
-                self.text_timer.cancel()
-            timer = threading.Timer(self.TEXT_IDLE_SECONDS, self._flush_text, args=("idle",))
-            timer.daemon = True
-            self.text_timer = timer
-            timer.start()
+            self._restart_text_timer()
+        self._emit_draft()
+
+    def _erase_text(self, window: dict[str, Any]) -> None:
+        with self._lock:
+            if not self.active or not self._typed_segment:
+                return
+            self._typed = self._typed[:-1]
+            self._typed_window = window
+            self._restart_text_timer() if self._typed else None
+        self._emit_draft()
+
+    def _restart_text_timer(self) -> None:
+        if self.text_timer:
+            self.text_timer.cancel()
+        timer = threading.Timer(self.TEXT_IDLE_SECONDS, self._flush_text, args=("idle",))
+        timer.daemon = True
+        self.text_timer = timer
+        timer.start()
+
+    def _emit_draft(self) -> None:
+        with self._lock:
+            text = self._typed
+            window = self._typed_window
+            segment_id = self._typed_segment
+        if segment_id:
+            self.emit(
+                "activity.event",
+                {
+                    "time": datetime.now().isoformat(timespec="seconds"),
+                    "type": "keyboard.text.draft",
+                    "detail": {"segment_id": segment_id, "text": text, "window": window or {}},
+                },
+            )
 
     def _flush_text(self, boundary: str) -> None:
         with self._lock:
             text = self._typed
             window = self._typed_window
+            segment_id = self._typed_segment
             self._typed = ""
             self._typed_window = None
+            self._typed_segment = None
             timer = self.text_timer
             self.text_timer = None
         if timer:
             timer.cancel()
         if text:
-            self._record("keyboard.text", {"text": text, "window": window or {}, "boundary": boundary})
+            self._record(
+                "keyboard.text",
+                {"segment_id": segment_id, "text": text, "window": window or {}, "boundary": boundary},
+            )
 
     def _poll_window(self) -> None:
         with self._lock:
@@ -199,9 +237,7 @@ class ActivityCapture:
             elif value == "Space":
                 self._append_text(" ", window)
             elif value == "Backspace":
-                with self._lock:
-                    self._typed = self._typed[:-1]
-                self._record("keyboard.key", {"key": "Backspace", "window": window})
+                self._erase_text(window)
             else:
                 self._flush_text(value.lower().replace(" ", "_"))
                 self._record("keyboard.key", {"key": value, "window": window})

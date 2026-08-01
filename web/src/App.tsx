@@ -197,10 +197,25 @@ export function App() {
           const agentId = String(message.agent_id ?? "")
           if (!agentId) return
           const activityEvent = message.event as ActivityEvent
-          setActivityEvents((current) => ({
-            ...current,
-            [agentId]: [activityEvent, ...(current[agentId] ?? [])].slice(0, 1000),
-          }))
+          const segmentId = typeof activityEvent.detail?.segment_id === "string" ? activityEvent.detail.segment_id : ""
+          const isTextUpdate = activityEvent.type === "keyboard.text.draft" || activityEvent.type === "keyboard.text"
+          setActivityEvents((current) => {
+            const events = current[agentId] ?? []
+            if (!segmentId || !isTextUpdate) {
+              return { ...current, [agentId]: [activityEvent, ...events].slice(0, 1000) }
+            }
+            const index = events.findIndex((event) => event.detail?.segment_id === segmentId)
+            const isEmptyDraft = activityEvent.type === "keyboard.text.draft" && !String(activityEvent.detail?.text ?? "")
+            if (isEmptyDraft) {
+              return { ...current, [agentId]: events.filter((event) => event.detail?.segment_id !== segmentId) }
+            }
+            if (index < 0) {
+              return { ...current, [agentId]: [activityEvent, ...events].slice(0, 1000) }
+            }
+            const next = [...events]
+            next[index] = activityEvent
+            return { ...current, [agentId]: next }
+          })
           return
         }
         if (message.type === "stream.frame" && message.frame) {
@@ -1209,7 +1224,7 @@ function LiveActivityFeed({ events }: { events: ActivityEvent[] }) {
       <div className="result-list-heading"><strong>Live device activity</strong><span>{events.length} event(s)</span></div>
       {events.length ? events.slice(0, 80).map((event, index) => (
         <div className="result-row" key={`${event.time}-${event.type}-${index}`}>
-          <div className="row-main"><strong>{event.type.replace(/\./g, " ")}</strong><div className="row-meta"><span>{activityEventSummary(event)}</span></div></div>
+          <div className="row-main"><strong>{activityEventLabel(event)}</strong><div className="row-meta"><span>{activityEventSummary(event)}</span></div></div>
           <time>{formatTime(event.time)}</time>
         </div>
       )) : <div className="empty-result"><strong>Waiting for approved activity session</strong><p>Events from this selected device will appear here in real time.</p></div>}
@@ -1217,6 +1232,9 @@ function LiveActivityFeed({ events }: { events: ActivityEvent[] }) {
   );
 }
 
+function activityEventLabel(event: ActivityEvent): string {
+  return event.type === "keyboard.text.draft" ? "keyboard text" : event.type.replace(/\./g, " ");
+}
 function activityEventSummary(event: ActivityEvent): string {
   const detail = event.detail ?? {};
   const window = detail.window as Record<string, unknown> | undefined;
