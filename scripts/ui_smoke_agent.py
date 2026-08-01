@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import psutil
@@ -26,6 +27,17 @@ def main() -> int:
         window.wait("visible", timeout=25)
         for label in ["Overview", "Access & Privacy", "Activity", "Settings"]:
             window.child_window(title=label, control_type="Button").wait("exists", timeout=8)
+        window.child_window(title="Access & Privacy", control_type="Button").click()
+        power_toggle = window.child_window(title="Allow real power actions", control_type="Button")
+        power_toggle.wait("enabled", timeout=8)
+        power_toggle.click_input()
+        window.child_window(title="Click the power toggle again to confirm real power actions. Every shutdown, restart, and sleep request will still need local approval.", control_type="Text").wait("visible", timeout=8)
+        power_toggle.click_input()
+        window.child_window(title="Refresh state", control_type="Button").click_input()
+        time.sleep(1)
+        control_texts = [control.window_text() for control in window.descendants() if control.window_text()]
+        if "enabled on this device" not in control_texts:
+            raise RuntimeError(f"Power safety did not update after confirmation: {control_texts[-60:]}")
         child_pids = {child.pid for child in psutil.Process(process.pid).children(recursive=True)}
         console_windows = []
         for candidate in Desktop(backend="win32").windows():

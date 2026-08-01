@@ -19,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
@@ -199,10 +199,89 @@ function Overview({ state, ready, onConnect, onDisconnect }: { state: AgentState
   </div>
 }
 
-function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state: AgentState; onChooseFolder: () => void; onRemove: (path: string) => void; onReset: () => void; onPower: (enabled: boolean) => void }) {
-  return <div className="space-y-6"><section><p className="text-xs font-semibold tracking-wide text-primary">LOCAL CONTROLS</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Access & Privacy</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">The Agent user owns these permissions. Web operators cannot lower consent requirements or browse folders that were not allowed here.</p></section>
-    <Card className="rounded-lg shadow-none"><CardHeader className="flex-row items-start justify-between gap-4"><div><CardTitle>Allowed folders</CardTitle><CardDescription className="mt-1.5">Only these folders can appear in Web Files after a local approval.</CardDescription></div><Button onClick={onChooseFolder}><FolderOpen />Allow folder</Button></CardHeader><CardContent><div className="divide-y divide-border rounded-lg border border-border">{state.config.allowed_folders.length ? state.config.allowed_folders.map((folder) => <div key={folder} className="flex items-center justify-between gap-4 px-4 py-3"><div className="flex min-w-0 items-center gap-3"><FolderOpen className="size-4 shrink-0 text-primary" /><span className="truncate font-mono text-xs">{folder}</span></div><Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(folder)}>Remove</Button></div>) : <div className="px-4 py-10 text-center text-sm text-muted-foreground">No folder has been allowed on this device.</div>}</div></CardContent></Card>
-    <div className="grid gap-5 lg:grid-cols-2"><Card className="rounded-lg shadow-none"><CardHeader><CardTitle>Session approvals</CardTitle><CardDescription>“Allow for this session” resets when the Agent disconnects, restarts, or you reset it.</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={onReset}><RefreshCw />Reset session approvals</Button></CardContent></Card><Card className="rounded-lg shadow-none"><CardHeader><CardTitle>Power safety</CardTitle><CardDescription>Keep real power actions off for a safe demo. Approval alone never enables a shutdown, restart, logout, or sleep action.</CardDescription></CardHeader><CardContent className="flex items-center justify-between gap-5"><div><p className="text-sm font-medium">Allow real power actions</p><p className="mt-1 text-xs text-muted-foreground">Currently {state.config.dry_run_power ? "dry-run only" : "enabled on this device"}</p></div><AlertDialog><AlertDialogTrigger asChild><div><Switch checked={!state.config.dry_run_power} /></div></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Enable real power actions?</AlertDialogTitle><AlertDialogDescription>Approved shutdown, restart, logout, and sleep requests could affect this Windows session. Keep dry-run mode enabled unless you are testing this behavior intentionally.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep dry-run</AlertDialogCancel><AlertDialogAction onClick={() => onPower(true)}>Enable</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></CardContent></Card></div>
+function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state: AgentState; onChooseFolder: () => void; onRemove: (path: string) => void; onReset: () => void; onPower: (enabled: boolean) => Promise<unknown> }) {
+  const [powerDialogOpen, setPowerDialogOpen] = useState(false)
+  const realPowerEnabled = !state.config.dry_run_power
+
+  const changePowerMode = async (enabled: boolean) => {
+    if (!enabled) {
+      setPowerDialogOpen(false)
+      try {
+        await onPower(false)
+      } catch {
+        // call() already displays the local bridge failure.
+      }
+      return
+    }
+
+    if (!powerDialogOpen) {
+      setPowerDialogOpen(true)
+      return
+    }
+
+    try {
+      await onPower(true)
+      setPowerDialogOpen(false)
+    } catch {
+      // call() already displays the local bridge failure.
+    }
+  }
+
+  return <div className="space-y-6">
+    <section>
+      <p className="text-xs font-semibold tracking-wide text-primary">LOCAL CONTROLS</p>
+      <h1 className="mt-1 text-3xl font-semibold tracking-tight">Access & Privacy</h1>
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">The Agent user owns these permissions. Web operators cannot lower consent requirements or browse folders that were not allowed here.</p>
+    </section>
+
+    <Card className="rounded-lg shadow-none">
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>Allowed folders</CardTitle>
+          <CardDescription className="mt-1.5">Only these folders can appear in Web Files after a local approval.</CardDescription>
+        </div>
+        <Button onClick={onChooseFolder}><FolderOpen />Allow folder</Button>
+      </CardHeader>
+      <CardContent>
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {state.config.allowed_folders.length ? state.config.allowed_folders.map((folder) => <div key={folder} className="flex items-center justify-between gap-4 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3"><FolderOpen className="size-4 shrink-0 text-primary" /><span className="truncate font-mono text-xs">{folder}</span></div>
+            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(folder)}>Remove</Button>
+          </div>) : <div className="px-4 py-10 text-center text-sm text-muted-foreground">No folder has been allowed on this device.</div>}
+        </div>
+      </CardContent>
+    </Card>
+
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card className="rounded-lg shadow-none">
+        <CardHeader>
+          <CardTitle>Session approvals</CardTitle>
+          <CardDescription>"Allow for this session" resets when the Agent disconnects, restarts, or you reset it.</CardDescription>
+        </CardHeader>
+        <CardContent><Button variant="outline" onClick={onReset}><RefreshCw />Reset session approvals</Button></CardContent>
+      </Card>
+
+      <Card className="rounded-lg shadow-none">
+        <CardHeader>
+          <CardTitle>Power safety</CardTitle>
+          <CardDescription>Keep real power actions off for a safe demo. Approval alone never enables a shutdown, restart, or sleep action.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between gap-5">
+            <div>
+              <p className="text-sm font-medium">Allow real power actions</p>
+              <p className="mt-1 text-xs text-muted-foreground">Currently {realPowerEnabled ? "enabled on this device" : "dry-run only"}</p>
+            </div>
+            <Switch checked={realPowerEnabled} onCheckedChange={changePowerMode} aria-label="Allow real power actions" />
+          </div>
+          {powerDialogOpen && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <p className="max-w-sm text-xs leading-5 text-muted-foreground">Click the power toggle again to confirm real power actions. Every shutdown, restart, and sleep request will still need local approval.</p>
+            <Button variant="outline" size="sm" onClick={() => setPowerDialogOpen(false)}>Keep dry-run</Button>
+          </div>}
+        </CardContent>
+      </Card>
+    </div>
+
   </div>
 }
 
