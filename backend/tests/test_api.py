@@ -37,6 +37,35 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert capabilities["activity.stop"]["requires_approval"] is True
     assert capabilities["power.sleep"]["requires_approval"] is True
     assert capabilities["power.status"]["requires_approval"] is True
+    assert "power.logout" not in capabilities
+
+    one_time_token = client.post(
+        "/api/enrollment-tokens",
+        headers=headers,
+        json={"label": "one-time", "reusable": False},
+    )
+    assert one_time_token.status_code == 200
+    assert one_time_token.json()["reusable"] is False
+    one_time_enrollment = client.post(
+        "/api/agents/enroll",
+        json={
+            "enrollment_token": one_time_token.json()["token"],
+            "name": "One Time Agent",
+            "hostname": "one-time-host",
+            "os": "Windows",
+        },
+    )
+    assert one_time_enrollment.status_code == 200
+    reused_one_time_token = client.post(
+        "/api/agents/enroll",
+        json={
+            "enrollment_token": one_time_token.json()["token"],
+            "name": "Should Not Enroll",
+            "hostname": "blocked-host",
+            "os": "Windows",
+        },
+    )
+    assert reused_one_time_token.status_code == 403
 
     enrolled = client.post(
         "/api/agents/enroll",
@@ -60,13 +89,14 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert command.json()["status"] == "failed"
     assert command.json()["error"] == "Agent offline"
 
-    unsupported = client.post(
-        "/api/commands",
-        headers=headers,
-        json={"agent_id": agent_id, "type": "system.exec", "payload": {}},
-    )
-    assert unsupported.status_code == 400
-    assert unsupported.json()["detail"] == "Unsupported command type"
+    for command_type in ("system.exec", "power.logout"):
+        unsupported = client.post(
+            "/api/commands",
+            headers=headers,
+            json={"agent_id": agent_id, "type": command_type, "payload": {}},
+        )
+        assert unsupported.status_code == 400
+        assert unsupported.json()["detail"] == "Unsupported command type"
 
 
 def test_cleanup_offline_agents_and_reenroll_reuses_identity(tmp_path):

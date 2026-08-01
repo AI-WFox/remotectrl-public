@@ -222,7 +222,7 @@ Không nhập mật khẩu hoặc dữ liệu thật trong phiên test.
 
 ## 13. Test Power
 
-Các action gồm **Shutdown**, **Restart** và **Logout**.
+Các action gồm **Shutdown**, **Restart** và **Sleep**.
 
 Bản demo mặc định dùng `dry_run`, vì vậy máy Agent không được tắt hoặc restart thật.
 

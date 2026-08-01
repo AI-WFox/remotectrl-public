@@ -51,7 +51,6 @@ COMMAND_CATALOG = [
     {"type": "webcam.live.stop", "label": "Stop webcam stream"},
     {"type": "power.shutdown", "label": "Shutdown endpoint"},
     {"type": "power.restart", "label": "Restart endpoint"},
-    {"type": "power.logout", "label": "Logout endpoint"},
     {"type": "power.sleep", "label": "Sleep endpoint"},
     {"type": "power.status", "label": "Read power status"},
     {"type": "keycapture.start", "label": "Start visible key-capture session"},
@@ -70,13 +69,7 @@ async def lifespan(_app: FastAPI):
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
     repo.ensure_admin(settings.default_admin_email, settings.default_admin_password)
-    if not repo.list_agents():
-        token_record, token = repo.create_enrollment_token("Initial demo enrollment", reusable=True)
-        repo.audit(
-            "system",
-            "enrollment_token.created",
-            detail={"id": token_record["id"], "label": token_record["label"], "demo_token": token},
-        )
+
     yield
 
 

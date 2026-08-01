@@ -70,7 +70,6 @@ class CommandHandlers:
             "files.download": self.files_download,
             "power.shutdown": self.power_shutdown,
             "power.restart": self.power_restart,
-            "power.logout": self.power_logout,
             "power.sleep": self.power_sleep,
             "power.status": self.power_status,
             "keycapture.start": self.keycapture_start,
@@ -342,9 +341,6 @@ class CommandHandlers:
 
     def power_restart(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return self._power(["shutdown", "/r", "/t", "5"], "restart")
-
-    def power_logout(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        return self._power(["shutdown", "/l"], "logout")
 
     def power_sleep(self, _payload: dict[str, Any]) -> dict[str, Any]:
         return self._power(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], "sleep")

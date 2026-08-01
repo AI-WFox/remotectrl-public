@@ -56,7 +56,7 @@ export async function createEnrollmentToken(token: string): Promise<{ token: str
   const response = await fetch(`${API_BASE}/api/enrollment-tokens`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ label: "Dashboard enrollment", reusable: true }),
+    body: JSON.stringify({ label: "Dashboard enrollment", reusable: false }),
   });
   if (!response.ok) throw await readError(response, "Token creation failed");
   return response.json();

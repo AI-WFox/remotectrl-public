@@ -35,7 +35,6 @@ APPROVAL_REQUIRED_COMMANDS = {
     "activity.export",
     "power.shutdown",
     "power.restart",
-    "power.logout",
     "power.sleep",
     "power.status",
 }
