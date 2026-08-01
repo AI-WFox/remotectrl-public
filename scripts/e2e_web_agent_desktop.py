@@ -114,7 +114,8 @@ def write_agent_config(appdata: Path, allowed_folder: Path, agent_id: str, agent
         f'  "allowed_folders": ["{allowed_folder.as_posix()}"],\n'
         "  \"paused\": false,\n"
         "  \"dry_run_power\": true,\n"
-        "  \"ui_theme\": \"light\"\n"
+        "  \"ui_theme\": \"light\",\n"
+        "  \"privacy_defaults_version\": 2\n"
         "}\n",
         encoding="utf-8",
     )
@@ -203,8 +204,14 @@ def approve_next(process: subprocess.Popen[object], expected_command: str) -> No
                 labels = [item.window_text() for item in approval.descendants() if item.window_text()]
                 if expected_command not in labels:
                     continue
-                button = next(item for item in approval.descendants() if item.window_text() == "Allow once")
-                button.iface_invoke.Invoke()
+                buttons = approval.descendants(control_type="Button", title="Allow once")
+                if not buttons:
+                    continue
+                button = buttons[0]
+                try:
+                    button.click_input()
+                except Exception:
+                    button.iface_invoke.Invoke()
                 return
             except Exception:
                 continue
