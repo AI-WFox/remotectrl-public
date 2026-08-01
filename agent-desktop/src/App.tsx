@@ -201,7 +201,11 @@ function Overview({ state, ready, onConnect, onDisconnect }: { state: AgentState
 
 function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state: AgentState; onChooseFolder: () => void; onRemove: (path: string) => void; onReset: () => void; onPower: (enabled: boolean) => Promise<unknown> }) {
   const [powerDialogOpen, setPowerDialogOpen] = useState(false)
-  const realPowerEnabled = !state.config.dry_run_power
+  const [localPowerEnabled, setLocalPowerEnabled] = useState<boolean | null>(null)
+  const reportedPowerEnabled = !state.config.dry_run_power
+  const realPowerEnabled = localPowerEnabled ?? reportedPowerEnabled
+
+  useEffect(() => setLocalPowerEnabled(null), [reportedPowerEnabled])
 
   const changePowerMode = async (enabled: boolean) => {
     if (enabled) {
@@ -209,18 +213,22 @@ function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state:
       return
     }
     setPowerDialogOpen(false)
+    setLocalPowerEnabled(false)
     try {
       await onPower(false)
     } catch {
+      setLocalPowerEnabled(null)
       // call() already displays the local bridge failure.
     }
   }
 
   const confirmPowerMode = async () => {
+    setLocalPowerEnabled(true)
+    setPowerDialogOpen(false)
     try {
       await onPower(true)
-      setPowerDialogOpen(false)
     } catch {
+      setLocalPowerEnabled(null)
       // call() already displays the local bridge failure.
     }
   }
