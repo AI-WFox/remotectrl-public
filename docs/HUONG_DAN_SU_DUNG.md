@@ -12,7 +12,7 @@ RemoteCtrl gồm:
 Một người có thể mở cả Web và Agent trên hai máy khác nhau. Để kiểm tra đúng luồng thực tế, nên dùng:
 
 - Máy A: mở Web Dashboard.
-- Máy B: chạy `RemoteCtrlAgent.exe`.
+- Máy B: chạy `RemoteCtrlAgent-Setup.exe`.
 - Hai máy có thể sử dụng hai mạng Internet khác nhau.
 
 ## 2. Thông tin tester sẽ nhận từ team
@@ -21,7 +21,7 @@ Trước khi test, tester cần có:
 
 1. URL Web Dashboard, ví dụ `https://remotectrl-public-demo.onrender.com`.
 2. Email và mật khẩu đăng nhập test.
-3. File `RemoteCtrlAgent.exe`.
+3. File `RemoteCtrlAgent-Setup.exe`.
 4. Mã SHA-256 của file Agent để đối chiếu.
 5. Phạm vi chức năng cần test trong phiên.
 
@@ -31,17 +31,17 @@ Không chia sẻ URL nội bộ, tài khoản test, mật khẩu hoặc enrollme
 
 ## 3. Chuẩn bị máy Agent
 
-1. Lưu `RemoteCtrlAgent.exe` vào một thư mục cố định.
+1. Lưu `RemoteCtrlAgent-Setup.exe` vào một thư mục cố định.
 2. Quét file bằng Windows Security.
 3. Đối chiếu SHA-256 nếu team có cung cấp:
 
 ```powershell
-Get-FileHash .\RemoteCtrlAgent.exe -Algorithm SHA256
+Get-FileHash .\RemoteCtrlAgent-Setup.exe -Algorithm SHA256
 ```
 
 4. Nhấp đúp để mở Agent.
 
-Agent là ứng dụng portable, không cần cài đặt.
+Agent dùng NSIS installer; sau khi cài, mở **RemoteCtrl Agent** từ Start Menu.
 
 Windows SmartScreen có thể cảnh báo vì bản test chưa được ký số. Chỉ chọn `More info` rồi `Run anyway` khi file đến đúng kênh của team và checksum khớp.
 
@@ -246,7 +246,7 @@ Sau mỗi nhóm chức năng, kiểm tra:
 
 - **Command Timeline** có đúng command type.
 - Trạng thái chuyển hợp lý: `queued` → `pending_approval` hoặc `running` → `succeeded`.
-- Stop Live/Stop Session không tạo approval prompt.
+- Stop Live/Stop Session cũng cần local approval.
 - Lệnh bị từ chối chuyển thành `denied`.
 - Lệnh lỗi chuyển thành `failed` và có thông báo rõ.
 - **Audit Trail** có event tạo command, approval, result, stream start và stream stop.

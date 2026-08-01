@@ -32,7 +32,7 @@ The command first packages the Python core with PyInstaller, including OpenCV, N
 
 - Installer: `agent-desktop\src-tauri\target\release\bundle\nsis\RemoteCtrl Agent_0.2.0_x64-setup.exe`
 - Version: `0.2.0`
-- SHA-256: `A22AC3ECB54067A8C6C1DE59EA0421C7C63208237CCB91E650052E508590C776`
+- Release checksum: `release/RemoteCtrlAgent-Setup.exe.sha256` (regenerated for every build).
 - Target: Windows 10/11 x64
 
 The installer is unsigned. Windows SmartScreen may show a warning on a new machine; use only the release artifact produced by this repository.

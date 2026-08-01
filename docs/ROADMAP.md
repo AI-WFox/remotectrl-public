@@ -5,8 +5,8 @@
 - FastAPI gateway with SQLite schema, auth token, enrollment, commands, audit, WebSocket routing.
 - Backend command lifecycle with `pending_approval`, offline failure handling, bootstrap capability metadata, API integration tests.
 - React/Vite dashboard shell with premium ops UI, light/dark mode, demo mode, agent/module navigation, command timeline, result card, audit drawer.
-- Windows Python agent app with enrollment, connection loop, local approval prompt, status log, safe command handlers, visible key-capture demo window.
-- Packaged Windows executable at `agent/dist/RemoteCtrlAgent.exe`.
+- Windows Agent Desktop with Tauri 2, React/Vite, Tailwind, shadcn/ui, bundled Python core, visible approval and activity indicators.
+- Packaged NSIS installer at `release/RemoteCtrlAgent-Setup.exe`.
 
 ## Verified
 
@@ -16,7 +16,7 @@
 - `agent/.venv/Scripts/python.exe scripts/ui_smoke_agent.py` passes: Windows agent app window opens.
 - `agent/.venv/Scripts/python.exe -m pytest agent/tests` passes.
 - `tools/node-v24.16.0-win-x64/npm.cmd run build` passes for the React/Vite dashboard.
-- PyInstaller successfully builds `agent/dist/RemoteCtrlAgent.exe`.
+- `scripts/package_agent_desktop.ps1` builds the Tauri NSIS installer and SHA-256 release artifact.
 
 ## Next hardening steps
 

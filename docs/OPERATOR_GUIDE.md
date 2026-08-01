@@ -28,10 +28,10 @@ Default credentials:
 
 1. Sign in to the dashboard.
 2. Click `Create enrollment token`.
-3. Run `agent\dist\RemoteCtrlAgent.exe` on the Windows endpoint.
+3. Run `release\RemoteCtrlAgent-Setup.exe` on the Windows endpoint, then open **RemoteCtrl Agent** from the Start Menu.
 4. Enter the gateway URL, for example `http://127.0.0.1:8000` for local dev or `https://<your-render-service>.onrender.com` for public demo.
 5. Paste the enrollment token.
-6. Click `Enroll`, then `Connect`.
+6. Click `Enroll`, then `Connect` from the Agent desktop app.
 
 ## Run Safe Demo Commands
 
@@ -45,7 +45,7 @@ Recommended demo order:
 6. `Key Capture`
 7. `Power`
 
-Remote commands show a local approval prompt on the agent by default. The Agent user may allow the same action family for the current session only. Stop Live/Stop Session commands do not prompt because they reduce access. Power commands default to dry-run mode.
+Remote commands show a local approval prompt on the agent by default. The Agent user may allow the same action family for the current session only. Stop Live/Stop Session commands also request local approval. Power commands default to dry-run mode.
 
 ## Verify Before Demo
 
@@ -64,4 +64,4 @@ Expected:
 - Python tests pass.
 - E2E mock-agent flow passes.
 - Dashboard production build passes.
-- `agent\dist\RemoteCtrlAgent.exe` exists.
+- `release\RemoteCtrlAgent-Setup.exe` and its `.sha256` file exist.

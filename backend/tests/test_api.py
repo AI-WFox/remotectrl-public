@@ -59,6 +59,14 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert command.json()["status"] == "failed"
     assert command.json()["error"] == "Agent offline"
 
+    unsupported = client.post(
+        "/api/commands",
+        headers=headers,
+        json={"agent_id": agent_id, "type": "system.exec", "payload": {}},
+    )
+    assert unsupported.status_code == 400
+    assert unsupported.json()["detail"] == "Unsupported command type"
+
 
 def test_cleanup_offline_agents_and_reenroll_reuses_identity(tmp_path):
     settings.database_path = tmp_path / "cleanup.db"

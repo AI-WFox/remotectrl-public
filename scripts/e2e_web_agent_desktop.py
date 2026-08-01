@@ -2,7 +2,7 @@
 
 Runs an isolated FastAPI gateway, Vite dashboard and the packaged Tauri Agent.
 The default suite uses only read-only or dry-run actions. Pass --extended to also
-exercise Notepad, screen live streaming and Activity Capture on this test machine.
+exercise Notepad, an additional screenshot and Activity Capture on this test machine.
 """
 from __future__ import annotations
 
@@ -243,12 +243,20 @@ def run_extended(page: Page, agent_process: subprocess.Popen[object]) -> None:
     run_approved(page, agent_process, "Activity Capture", "Stop Session", "activity.stop", "activity.stop")
 
 
+def assert_no_horizontal_overflow(page: Page, width: int, height: int) -> None:
+    page.set_viewport_size({"width": width, "height": height})
+    page.wait_for_timeout(250)
+    metrics = page.evaluate("() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth })")
+    if metrics["scrollWidth"] > metrics["viewport"] + 1:
+        raise E2EFailure(f"Dashboard has horizontal overflow at {width}x{height}: {metrics}")
+
+
 def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> None:
     if not CHROME.exists():
         raise E2EFailure(f"Chrome was not found: {CHROME}")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=str(CHROME), headless=True)
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page = browser.new_page(viewport={"width": 1366, "height": 768})
         agent_process: subprocess.Popen[object] | None = None
         try:
             log("opening dashboard in Chrome")
@@ -294,6 +302,8 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             agent_button.wait_for(timeout=15_000)
             agent_button.click()
             page.get_by_text("Gateway connected. Live agent data is active.", exact=True).wait_for(timeout=15_000)
+            assert_no_horizontal_overflow(page, 1366, 768)
+            assert_no_horizontal_overflow(page, 1920, 1080)
 
             log("checking Web command routing and approval dialogs")
             run_approved(page, agent_process, "Applications", "Refresh Applications", "app.list", "Visible windows")
@@ -314,7 +324,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--extended", action="store_true", help="Also start Notepad, Activity Capture and an additional screenshot.")
+    parser.add_argument("--extended", action="store_true", help="Also start Notepad, an additional screenshot and Activity Capture.")
     args = parser.parse_args()
     if not BACKEND_PYTHON.exists() or not NPM.exists():
         raise E2EFailure("Missing backend environment or bundled Node runtime.")

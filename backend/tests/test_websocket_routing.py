@@ -1,7 +1,9 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.core.db import init_db
-from app.main import app, settings
+from app.main import app, handle_agent_message, settings
 from app.services.repository import Repository
 
 
@@ -202,3 +204,34 @@ def test_agent_metadata_session_and_folder_events_reach_dashboard(tmp_path):
             agent.send_json({"type": "agent_config_invalidated", "kind": "allowed_folders"})
             invalidated = dashboard.receive_json()
             assert invalidated == {"type": "agent.config_invalidated", "agent_id": enrolled["agent_id"], "kind": "allowed_folders"}
+
+def test_agent_cannot_complete_another_agents_command(tmp_path):
+    settings.database_path = tmp_path / "cross-agent-command.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("cross-agent", reusable=True)
+    first, _first_token = repo.enroll_agent(enrollment_token, "Agent A", "host-a", "Windows", "127.0.0.1")
+    second, _second_token = repo.enroll_agent(enrollment_token, "Agent B", "host-b", "Windows", "127.0.0.1")
+    command = repo.create_command(second["id"], "process.list", {}, "admin@remotectrl.local")
+
+    asyncio.run(
+        handle_agent_message(
+            repo,
+            first["id"],
+            {
+                "type": "command_result",
+                "command_id": command["id"],
+                "ok": True,
+                "payload": {"count": 0, "items": []},
+            },
+        )
+    )
+
+    assert repo.get_command(command["id"])["status"] == "queued"
+    audit = repo.list_audit()
+    assert any(
+        event["action"] == "agent.command_rejected"
+        and event["detail"].get("reason") == "command_agent_mismatch"
+        for event in audit
+    )

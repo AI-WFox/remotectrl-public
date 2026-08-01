@@ -30,7 +30,8 @@ Remote-control capabilities can be abused when implemented as hidden tooling. Re
 
 - `backend/` - FastAPI API, WebSocket gateway, SQLite persistence.
 - `web/` - React/Vite dashboard with premium ops UI.
-- `agent/` - Windows Python agent app with enrollment and approval dialogs.
+- `agent/` - Python Agent Core: WebSocket, handlers, consent, streams.
+- `agent-desktop/` - Windows Tauri desktop shell, React UI, NSIS installer.
 - `docs/` - architecture, demo, and security notes.
 - `Resource/` - teacher-provided/reference material.
 
@@ -39,7 +40,7 @@ Remote-control capabilities can be abused when implemented as hidden tooling. Re
 ```powershell
 .\scripts\verify_all.ps1
 .\scripts\start_dev.ps1
-.\scripts\package_agent.ps1
+.\scripts\package_agent_desktop.ps1
 ```
 
 If PowerShell blocks local scripts, run:
@@ -77,28 +78,22 @@ npm run dev
 
 The dashboard also has a premium demo mode on the sign-in screen, so the UI can be inspected even before a gateway is running.
 
-### Agent
+### Windows Agent Desktop
+
+The distributable Agent is the Tauri desktop app with a bundled Python core. Build the NSIS installer with:
 
 ```powershell
-cd agent
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-python -m remotectrl_agent
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_agent_desktop.ps1
 ```
 
-For packaging:
-
-```powershell
-cd agent
-python -m PyInstaller --onefile --windowed --name RemoteCtrlAgent remotectrl_agent\__main__.py --distpath dist --workpath build --specpath .
-```
-
-Verified artifact in this workspace:
+Tester artifact:
 
 ```text
-agent\dist\RemoteCtrlAgent.exe
+release\RemoteCtrlAgent-Setup.exe
+release\RemoteCtrlAgent-Setup.exe.sha256
 ```
+
+For desktop development, see `docs/AGENT_DESKTOP.md`.
 
 ## Verification
 
@@ -112,7 +107,7 @@ agent\.venv\Scripts\python.exe scripts\ui_smoke_agent.py
 agent\.venv\Scripts\python.exe -m pytest agent\tests
 tools\node-v24.16.0-win-x64\npm.cmd install
 tools\node-v24.16.0-win-x64\npm.cmd run build
-agent\.venv\Scripts\python.exe -m PyInstaller --onefile --windowed --name RemoteCtrlAgent agent\remotectrl_agent\__main__.py --distpath agent\dist --workpath agent\build --specpath agent
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_agent_desktop.ps1
 ```
 
 This Codex environment did not have global `npm`, so a portable official Node.js LTS (`v24.16.0`) was used from `tools/` for verification. `tools/` is ignored and can be recreated.

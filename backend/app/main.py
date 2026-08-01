@@ -63,6 +63,7 @@ COMMAND_CATALOG = [
 ]
 for item in COMMAND_CATALOG:
     item["requires_approval"] = command_requires_approval(item["type"])
+COMMAND_TYPES = {item["type"] for item in COMMAND_CATALOG}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -204,6 +205,8 @@ async def create_command(
     user: dict[str, str] = Depends(require_user),
     repo: Repository = Depends(get_repository),
 ) -> dict:
+    if body.type not in COMMAND_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported command type")
     try:
         command = repo.create_command(body.agent_id, body.type, body.payload, user["email"])
     except KeyError as exc:
@@ -298,9 +301,31 @@ async def agent_ws(websocket: WebSocket) -> None:
             await manager.broadcast_dashboard({"type": "agent.offline", "agent_id": agent["id"]})
 
 
+def _agent_owns_command(repo: Repository, agent_id: str, command_id: str | None) -> bool:
+    if not command_id:
+        return False
+    try:
+        command = repo.get_command(command_id)
+    except KeyError:
+        repo.audit("agent", "agent.command_rejected", agent_id, detail={"reason": "unknown_command"})
+        return False
+    if command["agent_id"] == agent_id:
+        return True
+    repo.audit(
+        "agent",
+        "agent.command_rejected",
+        agent_id,
+        command_id,
+        {"reason": "command_agent_mismatch", "command_agent_id": command["agent_id"]},
+    )
+    return False
+
+
 async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -> None:
     message_type = message.get("type")
     command_id = message.get("command_id")
+    if message_type in {"approval_response", "command_result", "stream_status"} and not _agent_owns_command(repo, agent_id, command_id):
+        return
     if message_type == "agent_metadata":
         name = str(message.get("name") or "").strip()
         if not name:
