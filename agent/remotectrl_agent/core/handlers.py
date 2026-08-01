@@ -343,7 +343,8 @@ class CommandHandlers:
         return self._power(["shutdown", "/r", "/t", "5"], "restart")
 
     def power_sleep(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        return self._power(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], "sleep")
+        # Request normal suspend without forcing a critical state; forced suspend can behave like hibernate on some Windows drivers.
+        return self._power(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,0,0"], "sleep")
 
     def power_status(self, _payload: dict[str, Any]) -> dict[str, Any]:
         status: dict[str, Any] = {

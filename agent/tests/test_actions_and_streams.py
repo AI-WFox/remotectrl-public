@@ -67,6 +67,7 @@ def test_power_defaults_to_dry_run():
     assert result["action"] == "shutdown"
 
 
+
 def test_stream_start_and_stop_sends_status_and_result():
     class FakeHandlers:
         def handle(self, command_type, payload):
@@ -353,7 +354,7 @@ def test_power_sleep_real_mode_uses_windows_command(monkeypatch):
     result = handlers.power_sleep({})
 
     assert result["status"] == "requested"
-    assert launched == [["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]]
+    assert launched == [["rundll32.exe", "powrprof.dll,SetSuspendState", "0,0,0"]]
 
 
 def test_agent_windows_are_excluded_from_visible_app_results():
