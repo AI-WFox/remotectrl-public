@@ -36,3 +36,58 @@ def test_enroll_explains_when_saved_gateway_points_to_localhost(monkeypatch):
 
     with pytest.raises(RuntimeError, match="remotectrl-public-demo.onrender.com"):
         client.enroll("enroll_new")
+def test_client_retries_unexpected_disconnect_after_local_connect(monkeypatch):
+    config = AgentConfig(agent_token="saved-token")
+    statuses: list[str] = []
+    client = AgentClient(config, CommandHandlers(config, lambda _action: None), statuses.append, lambda _message: False)
+    attempts: list[int] = []
+
+    def connect_once():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary network loss")
+        client.stop_event.set()
+
+    monkeypatch.setattr(client, "_connect_once", connect_once)
+    monkeypatch.setattr(client.stop_event, "wait", lambda _seconds: False)
+
+    client._run_forever()
+
+    assert len(attempts) == 2
+    assert "Reconnecting in 1s: temporary network loss" in statuses
+
+
+def test_client_stops_retrying_when_local_user_disconnects(monkeypatch):
+    config = AgentConfig(agent_token="saved-token")
+    client = AgentClient(config, CommandHandlers(config, lambda _action: None), lambda _status: None, lambda _message: False)
+    attempts: list[int] = []
+
+    def connect_once():
+        attempts.append(1)
+        raise RuntimeError("network loss")
+
+    monkeypatch.setattr(client, "_connect_once", connect_once)
+    monkeypatch.setattr(client.stop_event, "wait", lambda _seconds: client.stop_event.set() or True)
+
+    client._run_forever()
+
+    assert len(attempts) == 1
+
+def test_client_retries_after_clean_gateway_close(monkeypatch):
+    config = AgentConfig(agent_token="saved-token")
+    statuses: list[str] = []
+    client = AgentClient(config, CommandHandlers(config, lambda _action: None), statuses.append, lambda _message: False)
+    attempts: list[int] = []
+
+    def connect_once():
+        attempts.append(1)
+        if len(attempts) == 2:
+            client.stop_event.set()
+
+    monkeypatch.setattr(client, "_connect_once", connect_once)
+    monkeypatch.setattr(client.stop_event, "wait", lambda _seconds: False)
+
+    client._run_forever()
+
+    assert len(attempts) == 2
+    assert "Reconnecting in 1s: gateway connection closed" in statuses

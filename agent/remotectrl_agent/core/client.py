@@ -114,18 +114,39 @@ class AgentClient:
                 pass
 
     def _run_forever(self) -> None:
-        """Make one local-user initiated connection attempt; never retry in the background."""
+        """Reconnect only after this device was explicitly connected by its local user."""
         if self.config.paused:
             self.on_status("Paused")
             return
         if not self.config.agent_token:
             self.on_status("Not enrolled")
             return
-        try:
-            self._connect_once()
-        except Exception as exc:
-            if not self.stop_event.is_set() and not self.config.paused:
-                self.on_status(f"Disconnected: {exc}")
+
+        delays = (1, 2, 5, 10, 20, 30)
+        attempt = 0
+        while not self.stop_event.is_set() and not self.config.paused:
+            try:
+                self._connect_once()
+                attempt = 0
+            except Exception as exc:
+                if self.stop_event.is_set() or self.config.paused:
+                    break
+                delay = delays[min(attempt, len(delays) - 1)]
+                self.on_status(f"Reconnecting in {delay}s: {exc}")
+                attempt += 1
+                if self.stop_event.wait(delay):
+                    break
+                continue
+
+            if self.stop_event.is_set() or self.config.paused:
+                break
+
+            # A clean socket close is still unexpected unless the local user stopped it.
+            delay = delays[min(attempt, len(delays) - 1)]
+            self.on_status(f"Reconnecting in {delay}s: gateway connection closed")
+            attempt += 1
+            if self.stop_event.wait(delay):
+                break
 
     def _connect_once(self) -> None:
         ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent?token={self.config.agent_token}"

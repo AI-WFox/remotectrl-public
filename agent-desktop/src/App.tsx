@@ -57,7 +57,7 @@ function statusKind(status: string) {
   const value = status.toLowerCase()
   if (value.startsWith("connected")) return "online"
   if (value.startsWith("paused")) return "paused"
-  if (value.startsWith("connecting")) return "connecting"
+  if (value.startsWith("connecting") || value.startsWith("reconnecting")) return "connecting"
   return "offline"
 }
 
@@ -65,6 +65,7 @@ function compactStatus(status: string) {
   const value = status.toLowerCase()
   if (value.startsWith("connected")) return "Connected"
   if (value.startsWith("connecting")) return "Connecting"
+  if (value.startsWith("reconnecting")) return "Reconnecting"
   if (value.startsWith("paused")) return "Paused"
   if (value.startsWith("disconnected")) return "Disconnected"
   return "Not connected"
@@ -220,7 +221,9 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     if (message.event === "agent.status") {
       applyState(message.data?.state)
       const status = String(message.data?.status ?? "")
-      if (status.toLowerCase().startsWith("disconnected:")) {
+      if (status.toLowerCase().startsWith("reconnecting")) {
+        toast.warning("Gateway connection lost", { id: "gateway-connection", description: status.replace(/^Reconnecting in \d+s:\s*/i, "") })
+      } else if (status.toLowerCase().startsWith("disconnected:")) {
         toast.error("Gateway connection failed", { id: "gateway-connection", description: status.replace(/^Disconnected:\s*/i, "") })
       } else if (status.toLowerCase().startsWith("connected")) {
         toast.dismiss("gateway-connection")
