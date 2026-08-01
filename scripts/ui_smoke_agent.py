@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import psutil
 from pywinauto import Desktop
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,17 @@ def main() -> int:
         window.wait("visible", timeout=25)
         for label in ["Overview", "Access & Privacy", "Activity", "Settings"]:
             window.child_window(title=label, control_type="Button").wait("exists", timeout=8)
-        print("Tauri Agent UI smoke test passed")
+        child_pids = {child.pid for child in psutil.Process(process.pid).children(recursive=True)}
+        console_windows = []
+        for candidate in Desktop(backend="win32").windows():
+            try:
+                if candidate.process_id() in child_pids and candidate.class_name() == "ConsoleWindowClass" and candidate.is_visible():
+                    console_windows.append(candidate.window_text())
+            except Exception:
+                continue
+        if console_windows:
+            raise RuntimeError(f"Agent core opened a visible terminal window: {console_windows}")
+        print("Tauri Agent UI smoke test passed (no visible Agent terminal)")
         return 0
     finally:
         if process.poll() is None:

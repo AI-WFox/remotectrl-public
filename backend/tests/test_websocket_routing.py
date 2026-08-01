@@ -164,3 +164,41 @@ def test_activity_events_reach_dashboard_only_as_realtime_messages(tmp_path):
                 "agent_id": enrolled["agent_id"],
                 "event": {"time": "2026-07-26T20:00:00", "type": "active_window.changed", "detail": {"title": "Notepad"}},
             }
+
+def test_agent_metadata_session_and_folder_events_reach_dashboard(tmp_path):
+    settings.database_path = tmp_path / "agent-events.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("agent-events", reusable=True)
+    client = TestClient(app)
+    enrolled = client.post(
+        "/api/agents/enroll",
+        json={"enrollment_token": enrollment_token, "name": "Original Agent", "hostname": "events-host", "os": "Windows"},
+    ).json()
+
+    with client.websocket_connect("/ws/dashboard") as dashboard:
+        assert dashboard.receive_json()["role"] == "dashboard"
+        dashboard.receive_json()
+        with client.websocket_connect(f"/ws/agent?token={enrolled['agent_token']}") as agent:
+            agent.receive_json()
+            dashboard.receive_json()  # agent.online
+
+            agent.send_json({"type": "agent_metadata", "name": "Renamed Agent"})
+            metadata = dashboard.receive_json()
+            assert metadata["type"] == "agent.metadata"
+            assert metadata["agent"]["name"] == "Renamed Agent"
+            assert repo.get_agent(enrolled["agent_id"])["name"] == "Renamed Agent"
+
+            agent.send_json({"type": "agent_session_state", "sessions": {"screen": True, "webcam": False, "activity": True}, "source": "local"})
+            session = dashboard.receive_json()
+            assert session == {
+                "type": "agent.session_state",
+                "agent_id": enrolled["agent_id"],
+                "sessions": {"screen": True, "webcam": False, "activity": True, "keycapture": False},
+                "source": "local",
+            }
+
+            agent.send_json({"type": "agent_config_invalidated", "kind": "allowed_folders"})
+            invalidated = dashboard.receive_json()
+            assert invalidated == {"type": "agent.config_invalidated", "agent_id": enrolled["agent_id"], "kind": "allowed_folders"}

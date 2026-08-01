@@ -15,6 +15,20 @@ from remotectrl_agent.core.config import AgentConfig, load_config, save_config
 from remotectrl_agent.core.handlers import CommandHandlers
 
 
+
+def hide_console_window() -> None:
+    """Keep console stdio for Tauri IPC without leaving a visible terminal window."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        console = ctypes.windll.kernel32.GetConsoleWindow()
+        if console:
+            ctypes.windll.user32.ShowWindow(console, 0)
+    except Exception:
+        pass
+
 class JsonBridge:
     """Line-delimited local IPC. Stdout is reserved for protocol messages."""
 
@@ -276,6 +290,7 @@ class AgentSidecar:
 
 
 def run() -> None:
+    hide_console_window()
     bridge = JsonBridge()
     app = AgentSidecar(bridge)
     bridge.event("agent.ready", {"state": app.state()})

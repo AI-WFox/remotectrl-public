@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import requests
 import websocket

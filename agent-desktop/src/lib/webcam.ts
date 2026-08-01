@@ -34,9 +34,9 @@ export class LocalWebcam {
   }
 
   async list() {
-    let probe: MediaStream | null = null
     try {
-      probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      if (!navigator.mediaDevices?.enumerateDevices) throw new Error("This Windows WebView does not support local camera capture.")
+      // Diagnostics must not activate the camera or trigger a Windows permission prompt.
       const devices = await navigator.mediaDevices.enumerateDevices()
       const cameras = devices
         .filter((device) => device.kind === "videoinput")
@@ -44,8 +44,6 @@ export class LocalWebcam {
       return { items: cameras, count: cameras.length, available: cameras.length > 0, capture_backend: "webview2", opencv_available: false, cv2_available: false, agent_packaged: true }
     } catch (error) {
       return { items: [], count: 0, available: false, capture_backend: "webview2", opencv_available: false, cv2_available: false, agent_packaged: true, error: cameraError(error) }
-    } finally {
-      probe?.getTracks().forEach((track) => track.stop())
     }
   }
 

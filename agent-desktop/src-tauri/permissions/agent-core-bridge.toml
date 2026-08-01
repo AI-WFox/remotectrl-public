@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-agent-core-bridge"
+description = "Allows the Agent desktop main window to exchange JSON Lines messages with its bundled local core."
+commands.allow = ["agent_bridge_write", "agent_core_shutdown"]

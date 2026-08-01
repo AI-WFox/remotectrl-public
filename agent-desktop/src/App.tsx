@@ -167,7 +167,7 @@ function AgentConsole() {
   }
 
   const chooseFolder = async () => {
-    const folder = "__TAURI_INTERNALS__" in window ? await open({ directory: true, multiple: false, title: "Allow folder for Web Files" }) : window.prompt("Folder path")
+    const folder = await open({ directory: true, multiple: false, title: "Allow folder for Web Files" })
     if (typeof folder === "string" && folder.trim()) await call("agent.add_allowed_folder", { path: folder })
   }
 

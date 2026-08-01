@@ -145,9 +145,18 @@ def start_agent(appdata: Path) -> subprocess.Popen[object]:
 
 
 def agent_window(process: subprocess.Popen[object]):
-    window = Desktop(backend="uia").window(title="RemoteCtrl Agent", process=process.pid)
-    window.wait("visible", timeout=30)
-    return window
+    deadline = time.monotonic() + 30
+    desktop = Desktop(backend="uia")
+    while time.monotonic() < deadline:
+        for window in desktop.windows():
+            try:
+                if window.process_id() == process.pid and window.window_text() == "RemoteCtrl Agent" and window.is_visible():
+                    return desktop.window(handle=window.handle)
+            except Exception:
+                continue
+        time.sleep(0.2)
+    windows = [(window.window_text(), window.process_id()) for window in desktop.windows() if window.window_text()]
+    raise E2EFailure(f"RemoteCtrl Agent window did not appear for PID {process.pid}; visible windows: {windows}")
 
 
 def wait_for_online_agent(access_token: str, timeout: float = 25.0) -> dict:
@@ -189,15 +198,26 @@ def approve_next(process: subprocess.Popen[object], expected_command: str) -> No
             if approval.window_text() != "RemoteCtrl Approval":
                 continue
             try:
-                button = approval.child_window(title="Allow once", control_type="Button")
-                button.wait("visible", timeout=3)
-                button.click_input()
+                if not approval.is_visible() or approval.process_id() != process.pid:
+                    continue
+                labels = [item.window_text() for item in approval.descendants() if item.window_text()]
+                if expected_command not in labels:
+                    continue
+                button = next(item for item in approval.descendants() if item.window_text() == "Allow once")
+                button.iface_invoke.Invoke()
                 return
             except Exception:
                 continue
         time.sleep(0.2)
     titles = [window.window_text() for window in desktop.windows() if window.window_text()]
-    raise E2EFailure(f"Approval window did not appear for {expected_command}; visible windows: {titles}")
+    approval_controls: list[str] = []
+    for approval in desktop.windows():
+        if approval.window_text() == "RemoteCtrl Approval":
+            try:
+                approval_controls.extend(item.window_text() for item in approval.descendants() if item.window_text())
+            except Exception:
+                pass
+    raise E2EFailure(f"Approval window did not appear for {expected_command}; visible windows: {titles}; approval controls: {approval_controls}")
 def run_approved(page: Page, agent_process: subprocess.Popen[object], module: str, action: str, command: str, expected: str, requires_approval: bool = True, result_timeout_ms: int = 25_000) -> None:
     page.get_by_role("button", name=module, exact=True).click()
     page.get_by_role("button", name=action, exact=True).click()
@@ -217,10 +237,10 @@ def run_approved(page: Page, agent_process: subprocess.Popen[object], module: st
 
 def run_extended(page: Page, agent_process: subprocess.Popen[object]) -> None:
     log("checking Web command routing and approval dialogs")
-    run_approved(page, agent_process, "Applications", "Notepad", "app.start", "Application started")
-    run_approved(page, agent_process, "Screen", "Capture Screenshot", "screen.screenshot", "Screenshot")
-    run_approved(page, agent_process, "Activity Capture", "Start Activity Session", "activity.start", "Activity capture")
-    run_approved(page, agent_process, "Activity Capture", "Stop Session", "activity.stop", "stopped")
+    run_approved(page, agent_process, "Applications", "Notepad", "app.start", "app.start")
+    run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
+    run_approved(page, agent_process, "Activity Capture", "Start Activity Session", "activity.start", "activity.start")
+    run_approved(page, agent_process, "Activity Capture", "Stop Session", "activity.stop", "activity.stop")
 
 
 def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> None:
@@ -250,12 +270,25 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             global APPROVAL_HANDLES_BEFORE
             APPROVAL_HANDLES_BEFORE = {window.handle for window in Desktop(backend="uia").windows() if window.window_text() == "RemoteCtrl Approval"}
             agent_process = start_agent(appdata)
-            agent_window(agent_process)
-
+            desktop_window = agent_window(agent_process)
+            connect_button = desktop_window.child_window(title="Reconnect", control_type="Button")
+            try:
+                connect_button.wait("enabled", timeout=45)
+            except Exception as exc:
+                controls = [item.window_text() for item in desktop_window.descendants() if item.window_text()]
+                raise E2EFailure(f"Agent core did not become ready: {exc}; controls={controls[:80]}") from exc
+            connect_button.click()
+            time.sleep(1)
+            immediate_controls = [item.window_text() for item in desktop_window.descendants() if item.window_text()]
+            log(f"Agent controls after Reconnect: {immediate_controls[-20:]}")
             dashboard_token = page.evaluate("localStorage.getItem('rt_token')")
             if not isinstance(dashboard_token, str):
                 raise E2EFailure("Dashboard did not store an authenticated session token.")
-            wait_for_online_agent(dashboard_token)
+            try:
+                wait_for_online_agent(dashboard_token)
+            except E2EFailure as exc:
+                controls = [item.window_text() for item in desktop_window.descendants() if item.window_text()]
+                raise E2EFailure(f"{exc}; Agent controls: {controls[:80]}") from exc
             page.get_by_title("Refresh").click()
             agent_button = page.get_by_role("button", name=AGENT_NAME, exact=False)
             agent_button.wait_for(timeout=15_000)
@@ -266,7 +299,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             run_approved(page, agent_process, "Applications", "Refresh Applications", "app.list", "Visible windows")
             run_approved(page, agent_process, "Processes", "Refresh Processes", "process.list", "Background processes")
             run_approved(page, agent_process, "Files", "Choose Folder", "files.roots", "Choose an allowed folder")
-            run_approved(page, agent_process, "Screen", "Capture Screenshot", "screen.screenshot", "Screenshot")
+            run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", requires_approval=False, result_timeout_ms=60_000)
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")
 
