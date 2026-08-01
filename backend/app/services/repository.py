@@ -25,6 +25,7 @@ APPROVAL_REQUIRED_COMMANDS = {
     "screen.screenshot",
     "webcam.live.start",
     "webcam.live.stop",
+    "webcam.list",
     "webcam.snapshot",
     "keycapture.start",
     "keycapture.stop",

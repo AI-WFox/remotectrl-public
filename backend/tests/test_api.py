@@ -31,6 +31,7 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert capabilities["files.roots"]["requires_approval"] is True
     assert capabilities["screen.live.stop"]["requires_approval"] is True
     assert capabilities["webcam.live.stop"]["requires_approval"] is True
+    assert capabilities["webcam.list"]["requires_approval"] is True
     assert capabilities["keycapture.stop"]["requires_approval"] is True
     assert capabilities["activity.start"]["requires_approval"] is True
     assert capabilities["activity.stop"]["requires_approval"] is True

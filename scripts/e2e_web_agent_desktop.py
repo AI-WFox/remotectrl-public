@@ -310,7 +310,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             run_approved(page, agent_process, "Processes", "Refresh Processes", "process.list", "Background processes")
             run_approved(page, agent_process, "Files", "Choose Folder", "files.roots", "Choose an allowed folder")
             run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
-            run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", requires_approval=False, result_timeout_ms=60_000)
+            run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")
 
             if extended:

@@ -16,7 +16,7 @@ class AgentConfig:
     agent_id: str | None = None
     agent_token: str | None = None
     agent_name: str = "RemoteCtrl Agent"
-    allowed_folders: list[str] = field(default_factory=lambda: [str(Path.home())])
+    allowed_folders: list[str] = field(default_factory=list)
     paused: bool = False
     dry_run_power: bool = True
     ui_theme: str = "light"
