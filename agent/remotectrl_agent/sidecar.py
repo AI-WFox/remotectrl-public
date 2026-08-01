@@ -260,7 +260,9 @@ class AgentSidecar:
             self.config.dry_run_power = not bool(params.get("enabled"))
             save_config(self.config)
             self._log("Real power actions enabled" if not self.config.dry_run_power else "Real power actions disabled")
-            return self.state()
+            state = self.state()
+            self.bridge.event("agent.config", {"config": self._public_config(), "state": state})
+            return state
         if method == "agent.set_theme":
             theme = "dark" if params.get("theme") == "dark" else "light"
             self.config.ui_theme = theme

@@ -31,15 +31,19 @@ def test_sidecar_folder_and_power_updates_are_persisted(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(sidecar_module, "save_config", lambda _config: None)
     config = AgentConfig(allowed_folders=[])
-    app = AgentSidecar(FakeBridge(), config)
+    bridge = FakeBridge()
+    app = AgentSidecar(bridge, config)
     folder = tmp_path / "allowed"
     folder.mkdir()
 
     app.dispatch("agent.add_allowed_folder", {"path": str(folder)})
-    app.dispatch("agent.power_mode", {"enabled": True})
+    power_state = app.dispatch("agent.power_mode", {"enabled": True})
 
     assert config.allowed_folders == [str(folder)]
     assert config.dry_run_power is False
+    assert power_state["config"]["dry_run_power"] is False
+    assert bridge.events[-1][0] == "agent.config"
+    assert bridge.events[-1][1]["state"]["config"]["dry_run_power"] is False
 
 def test_sidecar_keeps_saved_enrollment_offline_until_local_connect(monkeypatch):
     config = AgentConfig(agent_id="agent-1", agent_token="saved-token", paused=False)

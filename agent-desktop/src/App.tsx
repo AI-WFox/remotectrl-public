@@ -204,21 +204,19 @@ function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state:
   const realPowerEnabled = !state.config.dry_run_power
 
   const changePowerMode = async (enabled: boolean) => {
-    if (!enabled) {
-      setPowerDialogOpen(false)
-      try {
-        await onPower(false)
-      } catch {
-        // call() already displays the local bridge failure.
-      }
-      return
-    }
-
-    if (!powerDialogOpen) {
+    if (enabled) {
       setPowerDialogOpen(true)
       return
     }
+    setPowerDialogOpen(false)
+    try {
+      await onPower(false)
+    } catch {
+      // call() already displays the local bridge failure.
+    }
+  }
 
+  const confirmPowerMode = async () => {
     try {
       await onPower(true)
       setPowerDialogOpen(false)
@@ -270,13 +268,13 @@ function Privacy({ state, onChooseFolder, onRemove, onReset, onPower }: { state:
           <div className="flex items-center justify-between gap-5">
             <div>
               <p className="text-sm font-medium">Allow real power actions</p>
-              <p className="mt-1 text-xs text-muted-foreground">Currently {realPowerEnabled ? "enabled on this device" : "dry-run only"}</p>
+              <p className={`mt-1 text-xs ${realPowerEnabled ? "font-medium text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>Currently {realPowerEnabled ? "enabled on this device" : "dry-run only"}</p>
             </div>
             <Switch checked={realPowerEnabled} onCheckedChange={changePowerMode} aria-label="Allow real power actions" />
           </div>
           {powerDialogOpen && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <p className="max-w-sm text-xs leading-5 text-muted-foreground">Click the power toggle again to confirm real power actions. Every shutdown, restart, and sleep request will still need local approval.</p>
-            <Button variant="outline" size="sm" onClick={() => setPowerDialogOpen(false)}>Keep dry-run</Button>
+            <p className="max-w-sm text-xs leading-5 text-muted-foreground">Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.</p>
+            <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => setPowerDialogOpen(false)}>Keep dry-run</Button><Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400" onClick={confirmPowerMode}>Enable real mode</Button></div>
           </div>}
         </CardContent>
       </Card>

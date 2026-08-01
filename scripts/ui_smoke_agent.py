@@ -31,8 +31,8 @@ def main() -> int:
         power_toggle = window.child_window(title="Allow real power actions", control_type="Button")
         power_toggle.wait("enabled", timeout=8)
         power_toggle.click_input()
-        window.child_window(title="Click the power toggle again to confirm real power actions. Every shutdown, restart, and sleep request will still need local approval.", control_type="Text").wait("visible", timeout=8)
-        power_toggle.click_input()
+        window.child_window(title="Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.", control_type="Text").wait("visible", timeout=8)
+        window.child_window(title="Enable real mode", control_type="Button").click_input()
         window.child_window(title="Refresh state", control_type="Button").click_input()
         time.sleep(1)
         control_texts = [control.window_text() for control in window.descendants() if control.window_text()]
