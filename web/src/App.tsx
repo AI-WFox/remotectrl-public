@@ -1077,7 +1077,7 @@ function FileBreadcrumb({ path, rootPath, runCommand }: { path: string; rootPath
   return (
     <div className="file-breadcrumb" aria-label="Current directory">
       {parts.map((part, index) => (
-        <button key={`${part.path}-${index}`} onClick={() => runCommand("files.list", { path: part.path })}>
+        <button key={`${part.path}-${index}`} onClick={() => index === 0 ? runCommand("files.roots") : runCommand("files.list", { path: part.path })} title={index === 0 ? "Return to allowed folders" : "Open this folder"}>
           {part.label}
         </button>
       ))}
