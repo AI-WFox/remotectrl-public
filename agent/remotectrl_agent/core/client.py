@@ -67,6 +67,12 @@ class AgentClient:
                 timeout=15,
             )
         except requests.RequestException as exc:
+            hostname = (urlparse(self.config.server_url).hostname or "").lower()
+            if hostname in {"127.0.0.1", "localhost", "::1"}:
+                raise RuntimeError(
+                    "Gateway URL points to this Agent machine. For the public demo, enter the Render HTTPS URL "
+                    "(for example https://remotectrl-public-demo.onrender.com) in Settings, save it, then enroll again."
+                ) from exc
             raise RuntimeError(f"Cannot reach the Gateway. Check the Gateway URL and internet connection. ({exc})") from exc
 
         if response.status_code == 403:

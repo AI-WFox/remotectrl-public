@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Path $BinaryDir -Force | Out-Null
 & $AgentPython -m PyInstaller `
   --onefile `
   --console `
+  --hide-console hide-early `
   --name remotectrl-agent-core `
   --collect-all numpy `
   --collect-all PIL `
