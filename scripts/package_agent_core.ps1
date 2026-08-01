@@ -8,8 +8,7 @@ if (!(Test-Path $AgentPython)) { throw "Agent venv not found. Install agent requ
 New-Item -ItemType Directory -Path $BinaryDir -Force | Out-Null
 & $AgentPython -m PyInstaller `
   --onefile `
-  --console `
-  --hide-console hide-early `
+  --noconsole `
   --name remotectrl-agent-core `
   --collect-all numpy `
   --collect-all PIL `
