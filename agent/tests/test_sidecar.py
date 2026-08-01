@@ -112,3 +112,11 @@ def test_local_activity_stop_publishes_idle_session_state(monkeypatch):
     app.dispatch("agent.activity_stop_local", {})
 
     assert ("agent_session_state", {"sessions": {"screen": False, "webcam": False, "keycapture": False, "activity": False}, "source": "local"}) in gateway_events
+
+def test_remote_activity_stop_notifies_desktop_indicator(monkeypatch):
+    bridge = FakeBridge()
+    app = AgentSidecar(bridge, AgentConfig(agent_id="agent-1", agent_token="saved-token"))
+    monkeypatch.setattr(app.activity, "stop", lambda: "stopped")
+
+    assert app._provider("activity_stop") == "stopped"
+    assert ("activity.stopped", {"status": "stopped"}) in bridge.events

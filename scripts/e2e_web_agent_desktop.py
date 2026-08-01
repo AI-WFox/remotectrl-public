@@ -242,12 +242,34 @@ def run_approved(page: Page, agent_process: subprocess.Popen[object], module: st
         page.get_by_text("approval.response", exact=True).first.wait_for(timeout=12_000)
 
 
+def wait_for_activity_indicator(process: subprocess.Popen[object], visible: bool, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    desktop = Desktop(backend="uia")
+    while time.monotonic() < deadline:
+        shown = False
+        for window in desktop.windows():
+            try:
+                shown = shown or (
+                    window.process_id() == process.pid
+                    and window.window_text() == "RemoteCtrl Activity Capture"
+                    and window.is_visible()
+                )
+            except Exception:
+                continue
+        if shown == visible:
+            return
+        time.sleep(0.2)
+    expected = "open" if visible else "closed"
+    raise E2EFailure(f"Activity indicator did not become {expected}")
+
 def run_extended(page: Page, agent_process: subprocess.Popen[object]) -> None:
     log("checking Web command routing and approval dialogs")
     run_approved(page, agent_process, "Applications", "Notepad", "app.start", "app.start")
     run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
     run_approved(page, agent_process, "Activity Capture", "Start Activity Session", "activity.start", "activity.start")
+    wait_for_activity_indicator(agent_process, True)
     run_approved(page, agent_process, "Activity Capture", "Stop Session", "activity.stop", "activity.stop")
+    wait_for_activity_indicator(agent_process, False)
 
 
 def assert_no_horizontal_overflow(page: Page, width: int, height: int) -> None:

@@ -230,6 +230,7 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     if (message.event === "agent.session_state") applyState(message.data?.state)
     if (message.event === "agent.command_error") toast.error("Remote action failed", { description: String(message.data?.error ?? "Open Activity for details.") })
     if (message.event === "activity.started") await openActivityWindow()
+    if (message.event === "activity.stopped") await closeActivityWindow()
     return
   }
   if (message.type !== "request" || !message.id) return
@@ -316,6 +317,10 @@ async function openActivityWindow() {
   const existing = await WebviewWindow.getByLabel(label)
   if (existing) { await existing.show(); return }
   new WebviewWindow(label, { url: "/?view=activity", title: "RemoteCtrl Activity Capture", width: 460, height: 250, minWidth: 420, minHeight: 230, alwaysOnTop: true, resizable: false })
+}
+async function closeActivityWindow() {
+  const existing = await WebviewWindow.getByLabel("activity-indicator")
+  if (existing) await existing.close()
 }
 
 function ApprovalWindow({ requestId }: { requestId: string }) {
