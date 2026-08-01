@@ -11,15 +11,12 @@ from uuid import uuid4
 class ActivityCapture:
     """Visible, session-scoped activity collection owned by the Agent user."""
 
-    TEXT_IDLE_SECONDS = 0.75
-
     def __init__(self, emit: Callable[[str, dict[str, Any]], None]) -> None:
         self.emit = emit
         self.events: deque[dict[str, Any]] = deque(maxlen=1000)
         self.mouse_listener = None
         self.keyboard_listener = None
         self.window_timer: threading.Timer | None = None
-        self.text_timer: threading.Timer | None = None
         self.active = False
         self._modifiers: set[str] = set()
         self._typed = ""
@@ -51,8 +48,8 @@ class ActivityCapture:
             self.active = False
             listeners = (self.mouse_listener, self.keyboard_listener)
             self.mouse_listener = self.keyboard_listener = None
-            timers = (self.window_timer, self.text_timer)
-            self.window_timer = self.text_timer = None
+            timers = (self.window_timer,)
+            self.window_timer = None
             self._modifiers.clear()
         for timer in timers:
             if timer:
@@ -97,7 +94,6 @@ class ActivityCapture:
             self._typed += value
             self._typed = self._typed[-160:]
             self._typed_window = window
-            self._restart_text_timer()
         self._emit_draft()
 
     def _erase_text(self, window: dict[str, Any]) -> None:
@@ -106,16 +102,7 @@ class ActivityCapture:
                 return
             self._typed = self._typed[:-1]
             self._typed_window = window
-            self._restart_text_timer() if self._typed else None
         self._emit_draft()
-
-    def _restart_text_timer(self) -> None:
-        if self.text_timer:
-            self.text_timer.cancel()
-        timer = threading.Timer(self.TEXT_IDLE_SECONDS, self._flush_text, args=("idle",))
-        timer.daemon = True
-        self.text_timer = timer
-        timer.start()
 
     def _emit_draft(self) -> None:
         with self._lock:
@@ -140,10 +127,6 @@ class ActivityCapture:
             self._typed = ""
             self._typed_window = None
             self._typed_segment = None
-            timer = self.text_timer
-            self.text_timer = None
-        if timer:
-            timer.cancel()
         if text:
             self._record(
                 "keyboard.text",

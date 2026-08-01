@@ -34,22 +34,25 @@ def test_keyboard_text_flushes_on_mouse_click() -> None:
     assert isinstance(emitted[-1]["detail"]["segment_id"], str)
 
 
-def test_backspace_updates_the_current_text_segment() -> None:
+def test_backspace_keeps_typing_in_one_realtime_text_segment() -> None:
     emitted: list[dict] = []
     capture = ActivityCapture(lambda _event, data: emitted.append(data))
     capture.active = True
     window = {"pid": 1, "process": "notes.exe", "title": "Notes"}
 
-    capture._append_text("xin chof", window)
+    capture._append_text("hellox", window)
     capture._erase_text(window)
-    capture._erase_text(window)
-    capture._append_text("ào", window)
+    capture._append_text("!", window)
+
+    drafts = [event for event in emitted if event["type"] == "keyboard.text.draft"]
+    assert [event["detail"]["text"] for event in drafts] == ["hellox", "hello", "hello!"]
+    assert len({event["detail"]["segment_id"] for event in drafts}) == 1
+    assert capture.export() == []
+
     capture._flush_text("test_complete")
 
     exported = capture.export()
     assert [event["type"] for event in exported] == ["keyboard.text"]
-    assert exported[0]["detail"]["text"] == "xin chào"
+    assert exported[0]["detail"]["text"] == "hello!"
+    assert exported[0]["detail"]["segment_id"] == drafts[-1]["detail"]["segment_id"]
     assert not any(event["type"] == "keyboard.key" and event["detail"].get("key") == "Backspace" for event in emitted)
-    drafts = [event for event in emitted if event["type"] == "keyboard.text.draft"]
-    assert drafts[-1]["detail"]["text"] == "xin chào"
-    assert drafts[-1]["detail"]["segment_id"] == exported[0]["detail"]["segment_id"]
