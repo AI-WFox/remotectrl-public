@@ -235,3 +235,40 @@ def test_agent_cannot_complete_another_agents_command(tmp_path):
         and event["detail"].get("reason") == "command_agent_mismatch"
         for event in audit
     )
+
+def test_agent_cannot_forward_a_stream_frame_for_another_agents_command(tmp_path, monkeypatch):
+    settings.database_path = tmp_path / "cross-agent-stream-frame.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    _record, enrollment_token = repo.create_enrollment_token("cross-agent-stream", reusable=True)
+    first, _first_token = repo.enroll_agent(enrollment_token, "Agent A", "host-a", "Windows", "127.0.0.1")
+    second, _second_token = repo.enroll_agent(enrollment_token, "Agent B", "host-b", "Windows", "127.0.0.1")
+    command = repo.create_command(second["id"], "screen.live.start", {}, "admin@remotectrl.local")
+    broadcasts: list[dict] = []
+
+    async def record_broadcast(message: dict) -> None:
+        broadcasts.append(message)
+
+    from app import main as main_module
+    monkeypatch.setattr(main_module.manager, "broadcast_dashboard", record_broadcast)
+
+    asyncio.run(
+        handle_agent_message(
+            repo,
+            first["id"],
+            {
+                "type": "stream_frame",
+                "command_id": command["id"],
+                "agent_id": second["id"],
+                "mime": "image/jpeg",
+                "frame": "not-a-real-frame",
+            },
+        )
+    )
+
+    assert broadcasts == []
+    assert any(
+        event["action"] == "agent.command_rejected"
+        and event["detail"].get("reason") == "command_agent_mismatch"
+        for event in repo.list_audit()
+    )

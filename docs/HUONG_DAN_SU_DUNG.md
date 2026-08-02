@@ -236,7 +236,7 @@ Kết quả mong đợi:
 
 - Kết quả hiển thị `dry_run`.
 - Audit ghi đúng action.
-- Máy Agent không thực sự shutdown, restart hoặc logout.
+- Máy Agent không thực sự shutdown, restart hoặc sleep.
 
 Nếu máy thực hiện Power action thật trong bài test mặc định, dừng test và báo lỗi mức nghiêm trọng ngay.
 

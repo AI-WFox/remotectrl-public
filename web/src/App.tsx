@@ -691,8 +691,8 @@ function LoginScreen({ onLogin, onDemo, error, theme, setTheme }: { onLogin: (ev
         </div>
         <h1>Control center sign in</h1>
         <p>Use the demo admin account or your configured operator account.</p>
-        <label>Email<input name="email" defaultValue="admin@remotectrl.local" /></label>
-        <label>Password<input name="password" type="password" defaultValue="admin12345" /></label>
+        <label>Email<input name="email" type="email" autoComplete="username" placeholder="operator@example.com" /></label>
+        <label>Password<input name="password" type="password" autoComplete="current-password" placeholder="Enter your password" /></label>
         {error && <div className="error">{error}</div>}
         <button className="primary">Sign in</button>
         <button className="secondary full-width" type="button" onClick={onDemo}>View premium demo dashboard</button>

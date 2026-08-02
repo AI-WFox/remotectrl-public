@@ -317,7 +317,7 @@ def _agent_owns_command(repo: Repository, agent_id: str, command_id: str | None)
 async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -> None:
     message_type = message.get("type")
     command_id = message.get("command_id")
-    if message_type in {"approval_response", "command_result", "stream_status"} and not _agent_owns_command(repo, agent_id, command_id):
+    if message_type in {"approval_response", "command_result", "stream_status", "stream_frame"} and not _agent_owns_command(repo, agent_id, command_id):
         return
     if message_type == "agent_metadata":
         name = str(message.get("name") or "").strip()
