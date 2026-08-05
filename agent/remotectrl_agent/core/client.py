@@ -50,8 +50,8 @@ class AgentClient:
         self.state_lock = threading.RLock()
         self.active_streams: dict[str, tuple[threading.Event, threading.Thread]] = {}
         self.session_approvals: set[str] = set()
-        self.keycapture_active = False
         self.activity_active = False
+        self.command_slots = threading.BoundedSemaphore(8)
         self.thread: threading.Thread | None = None
 
     def enroll(self, enrollment_token: str) -> None:
@@ -149,9 +149,14 @@ class AgentClient:
                 break
 
     def _connect_once(self) -> None:
-        ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent?token={self.config.agent_token}"
+        ws_url = f"{http_to_ws(self.config.server_url.rstrip('/'))}/ws/agent"
         self.on_status("Connecting")
         ws = websocket.create_connection(ws_url, timeout=10)
+        ws.send(json.dumps({"type": "authenticate", "token": self.config.agent_token}))
+        hello = json.loads(ws.recv())
+        if hello.get("type") != "hello" or hello.get("role") != "agent":
+            ws.close()
+            raise RuntimeError("Gateway rejected Agent authentication")
         with self.state_lock:
             self.active_ws = ws
         self.on_status("Connected")
@@ -168,22 +173,32 @@ class AgentClient:
                     continue
                 if not raw:
                     break
-                # Consent waits must not block the socket reader; each command has its own worker.
-                threading.Thread(target=self._handle_message, args=(ws, json.loads(raw)), daemon=True).start()
+                message = json.loads(raw)
+                if message.get("type") != "command":
+                    continue
+                if not self.command_slots.acquire(blocking=False):
+                    self._send(
+                        ws,
+                        result(
+                            str(message.get("command_id") or ""),
+                            str(message.get("agent_id") or self.config.agent_id or ""),
+                            False,
+                            error="Agent is busy processing other requests",
+                        ),
+                    )
+                    continue
+                threading.Thread(target=self._handle_message_bounded, args=(ws, message), daemon=True).start()
         finally:
             self._stop_all_streams()
             # Local-visible capture must never continue after the authenticated gateway session ends.
             try:
                 if self.activity_active:
                     self.handlers.handle("activity.stop", {})
-                if self.keycapture_active:
-                    self.handlers.handle("keycapture.stop", {})
             except Exception:
                 pass
             with self.state_lock:
                 self.active_ws = None
                 self.session_approvals.clear()
-                self.keycapture_active = False
                 self.activity_active = False
             self._notify_session_change()
             ws.close()
@@ -202,6 +217,13 @@ class AgentClient:
             return True
         except Exception:
             return False
+
+    def _handle_message_bounded(self, ws, message: dict) -> None:
+        try:
+            self._handle_message(ws, message)
+        finally:
+            self.command_slots.release()
+
     def _handle_message(self, ws, message: dict) -> None:
         if message.get("type") != "command":
             return
@@ -212,9 +234,9 @@ class AgentClient:
         if command_type in {"screen.live.start", "webcam.live.start"} and self._stream_active(command_type):
             self._send(ws, result(command_id, agent_id, True, payload={"status": "already_running", "stream": self._stream_name(command_type)}))
             return
-        if command_type in {"keycapture.start", "activity.start"}:
+        if command_type == "activity.start":
             with self.state_lock:
-                already_active = self.keycapture_active if command_type == "keycapture.start" else self.activity_active
+                already_active = self.activity_active
             if already_active:
                 payload_result = self.handlers.handle(command_type, payload)
                 payload_result["status"] = "already_running"
@@ -253,25 +275,28 @@ class AgentClient:
                 payload_result = self.handlers.handle(command_type, screenshot_payload)
             else:
                 payload_result = self.handlers.handle(command_type, payload)
-            if command_type == "keycapture.start" and payload_result.get("status") in {"started", "already_running"}:
-                with self.state_lock:
-                    self.keycapture_active = True
-            elif command_type == "keycapture.stop":
-                with self.state_lock:
-                    self.keycapture_active = False
-            elif command_type == "activity.start" and payload_result.get("status") in {"started", "already_running"}:
+            if command_type == "activity.start" and payload_result.get("status") in {"started", "already_running"}:
                 with self.state_lock:
                     self.activity_active = True
             elif command_type == "activity.stop":
                 with self.state_lock:
                     self.activity_active = False
-            if command_type in {"keycapture.start", "keycapture.stop", "activity.start", "activity.stop"}:
+            if command_type in {"activity.start", "activity.stop"}:
                 self._notify_session_change()
             self._send(ws, result(command_id, agent_id, True, payload=payload_result))
         except Exception as exc:
             error = str(exc)
             self._report_command_error(command_type, error)
-            self._send(ws, {"type": "agent_command_error", "agent_id": agent_id, "command_type": command_type, "error": error})
+            self._send(
+                ws,
+                {
+                    "type": "agent_command_error",
+                    "agent_id": agent_id,
+                    "command_id": command_id,
+                    "command_type": command_type,
+                    "error": error,
+                },
+            )
             self._send(ws, result(command_id, agent_id, False, error=error))
 
 
@@ -282,6 +307,7 @@ class AgentClient:
             self.on_session_change()
         except Exception:
             pass
+
     def reset_session_approvals(self) -> None:
         with self.state_lock:
             self.session_approvals.clear()
@@ -328,6 +354,7 @@ class AgentClient:
                 self.on_command_error(command_type, error)
             except Exception:
                 pass
+
     def _stream_name(self, command_type: str) -> str:
         return "screen" if command_type.startswith("screen.") else "webcam"
 
@@ -498,7 +525,7 @@ class AgentClient:
             self._notify_session_change()
 
     def _notify_handler_provider(self, action: str) -> None:
-        provider = getattr(self.handlers, "keycapture_provider", None)
+        provider = getattr(self.handlers, "desktop_provider", None)
         if callable(provider):
             provider(action)
 

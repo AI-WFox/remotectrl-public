@@ -27,9 +27,6 @@ APPROVAL_REQUIRED_COMMANDS = {
     "webcam.live.stop",
     "webcam.list",
     "webcam.snapshot",
-    "keycapture.start",
-    "keycapture.stop",
-    "keycapture.export",
     "activity.start",
     "activity.stop",
     "activity.export",
@@ -64,6 +61,10 @@ class Repository:
         with session(self.database_path) as conn:
             existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
             if existing:
+                conn.execute(
+                    "UPDATE users SET password_hash=?, role='admin' WHERE id=?",
+                    (hash_password(password), existing["id"]),
+                )
                 return
             conn.execute(
                 "INSERT INTO users (id,email,password_hash,role,created_at) VALUES (?,?,?,?,?)",

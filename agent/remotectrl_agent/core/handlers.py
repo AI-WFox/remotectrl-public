@@ -52,9 +52,9 @@ APP_TITLE_ALIASES = {
 
 
 class CommandHandlers:
-    def __init__(self, config: AgentConfig, keycapture_provider):
+    def __init__(self, config: AgentConfig, desktop_provider):
         self.config = config
-        self.keycapture_provider = keycapture_provider
+        self.desktop_provider = desktop_provider
 
     def handle(self, command_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         routes = {
@@ -72,9 +72,7 @@ class CommandHandlers:
             "power.restart": self.power_restart,
             "power.sleep": self.power_sleep,
             "power.status": self.power_status,
-            "keycapture.start": self.keycapture_start,
-            "keycapture.stop": self.keycapture_stop,
-            "keycapture.export": self.keycapture_export,
+
             "activity.start": self.activity_start,
             "activity.stop": self.activity_stop,
             "activity.export": self.activity_export,
@@ -265,7 +263,7 @@ class CommandHandlers:
         quality = min(max(int(payload.get("quality", 75)), 35), 90)
         hide_approval_windows = bool(payload.get("_hide_approval_windows"))
         if hide_approval_windows:
-            self.keycapture_provider("screen_capture_hide_approval")
+            self.desktop_provider("screen_capture_hide_approval")
         try:
             image = ImageGrab.grab()
             buf = io.BytesIO()
@@ -278,7 +276,7 @@ class CommandHandlers:
             }
         finally:
             if hide_approval_windows:
-                self.keycapture_provider("screen_capture_restore_approval")
+                self.desktop_provider("screen_capture_restore_approval")
 
     def files_roots(self, _payload: dict[str, Any]) -> dict[str, Any]:
         roots = []
@@ -370,27 +368,17 @@ class CommandHandlers:
             status["diagnostic_error"] = str(exc)
         return status
 
-    def keycapture_start(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        status = self.keycapture_provider("start") or "started"
-        return {"status": status, "mode": "visible_demo_window"}
-
-    def keycapture_stop(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        status = self.keycapture_provider("stop") or "stopped"
-        return {"status": status}
-
-    def keycapture_export(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        return {"text": self.keycapture_provider("export"), "mode": "visible_demo_window"}
 
     def activity_start(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        status = self.keycapture_provider("activity_start") or "started"
+        status = self.desktop_provider("activity_start") or "started"
         return {"status": status, "mode": "visible_activity_session"}
 
     def activity_stop(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        status = self.keycapture_provider("activity_stop") or "stopped"
+        status = self.desktop_provider("activity_stop") or "stopped"
         return {"status": status}
 
     def activity_export(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        return {"events": self.keycapture_provider("activity_export"), "mode": "visible_activity_session"}
+        return {"events": self.desktop_provider("activity_export"), "mode": "visible_activity_session"}
 
     def _power(self, args: list[str], action: str) -> dict[str, Any]:
         if self.config.dry_run_power:

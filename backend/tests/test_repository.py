@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.core.db import init_db
+from app.core.security import verify_password
 from app.services.repository import Repository
 
 
@@ -27,3 +28,17 @@ def test_command_sensitive_approval(tmp_path: Path):
     assert command["requires_approval"] is True
     command = repo.create_command(agent["id"], "power.status", {}, "a@b.test")
     assert command["requires_approval"] is True
+
+
+def test_ensure_admin_updates_bootstrap_password(tmp_path: Path):
+    db = tmp_path / "admin-password.db"
+    init_db(db)
+    repo = Repository(db)
+
+    repo.ensure_admin("admin@example.test", "first-password")
+    repo.ensure_admin("admin@example.test", "second-password")
+
+    user = repo.find_user_by_email("admin@example.test")
+    assert user is not None
+    assert verify_password("second-password", user["password_hash"])
+    assert not verify_password("first-password", user["password_hash"])

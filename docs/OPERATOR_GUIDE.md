@@ -19,10 +19,10 @@ Open:
 
 For a public demo where agents can connect from any network, deploy the Docker service on Render and use the Render URL instead. See `docs/RENDER_PUBLIC_DEMO.md`.
 
-Default credentials:
+Unsafe local-development defaults (never use these on Render):
 
 - Email: `admin@remotectrl.local`
-- Password: `admin12345`
+- Password: the local value of `REMOTECTRL_ADMIN_PASSWORD`
 
 ## Enroll An Agent
 
@@ -42,7 +42,7 @@ Recommended demo order:
 3. `Files`
 4. `Screen`
 5. `Webcam`
-6. `Key Capture`
+6. `Activity Capture`
 7. `Power`
 
 Remote commands show a local approval prompt on the agent by default. The Agent user may allow the same action family for the current session only. Stop Live/Stop Session commands also request local approval. Power commands default to dry-run mode.

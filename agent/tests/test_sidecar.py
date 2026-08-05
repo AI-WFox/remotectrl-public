@@ -115,7 +115,7 @@ def test_local_activity_stop_publishes_idle_session_state(monkeypatch):
 
     app.dispatch("agent.activity_stop_local", {})
 
-    assert ("agent_session_state", {"sessions": {"screen": False, "webcam": False, "keycapture": False, "activity": False}, "source": "local"}) in gateway_events
+    assert ("agent_session_state", {"sessions": {"screen": False, "webcam": False, "activity": False}, "source": "local"}) in gateway_events
 
 def test_remote_activity_stop_notifies_desktop_indicator(monkeypatch):
     bridge = FakeBridge()

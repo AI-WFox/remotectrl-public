@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pytest
 import requests
 from types import SimpleNamespace
@@ -91,3 +92,63 @@ def test_client_retries_after_clean_gateway_close(monkeypatch):
 
     assert len(attempts) == 2
     assert "Reconnecting in 1s: gateway connection closed" in statuses
+
+
+def test_client_authenticates_in_first_websocket_message(monkeypatch):
+    class FakeSocket:
+        def __init__(self):
+            self.sent: list[str] = []
+            self.messages = [json.dumps({"type": "hello", "role": "agent"}), ""]
+
+        def send(self, value):
+            self.sent.append(value)
+
+        def recv(self):
+            return self.messages.pop(0)
+
+        def close(self):
+            return None
+
+    fake_socket = FakeSocket()
+    opened_urls: list[str] = []
+    monkeypatch.setattr(
+        client_module.websocket,
+        "create_connection",
+        lambda url, timeout: opened_urls.append(url) or fake_socket,
+        raising=False,
+    )
+    config = AgentConfig(
+        server_url="https://gateway.example",
+        agent_id="agent-1",
+        agent_token="secret-agent-token",
+    )
+    client = AgentClient(
+        config,
+        CommandHandlers(config, lambda _action: None),
+        lambda _status: None,
+        lambda _message: False,
+    )
+
+    client._connect_once()
+
+    assert opened_urls == ["wss://gateway.example/ws/agent"]
+    assert json.loads(fake_socket.sent[0]) == {
+        "type": "authenticate",
+        "token": "secret-agent-token",
+    }
+    assert "secret-agent-token" not in opened_urls[0]
+
+
+def test_client_limits_concurrent_command_workers():
+    config = AgentConfig(agent_token="saved-token")
+    client = AgentClient(
+        config,
+        CommandHandlers(config, lambda _action: None),
+        lambda _status: None,
+        lambda _message: False,
+    )
+
+    assert all(client.command_slots.acquire(blocking=False) for _ in range(8))
+    assert client.command_slots.acquire(blocking=False) is False
+    for _ in range(8):
+        client.command_slots.release()

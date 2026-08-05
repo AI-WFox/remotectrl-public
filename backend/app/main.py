@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -23,6 +24,7 @@ from app.schemas import (
     EnrollmentTokenResponse,
     LoginRequest,
     LoginResponse,
+    WebSocketTicketResponse,
 )
 from app.services.repository import Repository, command_requires_approval
 from app.services.session_manager import SessionManager
@@ -53,9 +55,6 @@ COMMAND_CATALOG = [
     {"type": "power.restart", "label": "Restart endpoint"},
     {"type": "power.sleep", "label": "Sleep endpoint"},
     {"type": "power.status", "label": "Read power status"},
-    {"type": "keycapture.start", "label": "Start visible key-capture session"},
-    {"type": "keycapture.stop", "label": "Stop visible key-capture session"},
-    {"type": "keycapture.export", "label": "Export visible key-capture session"},
     {"type": "activity.start", "label": "Start visible activity capture session"},
     {"type": "activity.stop", "label": "Stop visible activity capture session"},
     {"type": "activity.export", "label": "Export visible activity capture session"},
@@ -66,6 +65,7 @@ COMMAND_TYPES = {item["type"] for item in COMMAND_CATALOG}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    settings.validate_runtime()
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
     repo.ensure_admin(settings.default_admin_email, settings.default_admin_password)
@@ -84,6 +84,20 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "connect-src 'self' ws: wss:"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "remotectrl-gateway"}
@@ -93,7 +107,6 @@ def health() -> dict[str, str]:
 def bootstrap() -> dict:
     return {
         "service": settings.app_name,
-        "demo_admin_email": settings.default_admin_email,
         "capabilities": COMMAND_CATALOG,
         "safety": {
             "local_approval_required": True,
@@ -114,6 +127,14 @@ def login(body: LoginRequest, repo: Repository = Depends(get_repository)) -> Log
     )
     repo.audit(user["email"], "auth.login")
     return LoginResponse(access_token=access_token)
+
+
+@app.post("/api/auth/ws-ticket", response_model=WebSocketTicketResponse)
+def create_dashboard_ws_ticket(
+    _user: dict[str, str] = Depends(require_user),
+) -> WebSocketTicketResponse:
+    expires_in = 30
+    return WebSocketTicketResponse(ticket=manager.issue_dashboard_ticket(expires_in), expires_in=expires_in)
 
 
 @app.post("/api/enrollment-tokens", response_model=EnrollmentTokenResponse)
@@ -256,6 +277,10 @@ def list_audit(
 
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket) -> None:
+    ticket = websocket.query_params.get("ticket") or ""
+    if not manager.consume_dashboard_ticket(ticket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     await manager.connect_dashboard(websocket)
     try:
         await websocket.send_json({"type": "hello", "role": "dashboard"})
@@ -268,13 +293,22 @@ async def dashboard_ws(websocket: WebSocket) -> None:
 
 @app.websocket("/ws/agent")
 async def agent_ws(websocket: WebSocket) -> None:
-    token = websocket.query_params.get("token")
-    repo = Repository(settings.database_path)
-    agent = repo.find_agent_by_token(token or "")
-    if not agent:
-        await websocket.close(code=4403)
+    await websocket.accept()
+    try:
+        authentication = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+    except (asyncio.TimeoutError, WebSocketDisconnect):
+        await websocket.close(code=4401, reason="Authentication required")
         return
-    await manager.connect_agent(agent["id"], websocket)
+    if authentication.get("type") != "authenticate":
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+    token = str(authentication.get("token") or "")
+    repo = Repository(settings.database_path)
+    agent = repo.find_agent_by_token(token)
+    if not agent:
+        await websocket.close(code=4403, reason="Invalid Agent credential")
+        return
+    manager.attach_agent(agent["id"], websocket)
     repo.set_agent_status(agent["id"], "online", websocket.client.host if websocket.client else None)
     repo.audit("agent", "agent.connected", agent_id=agent["id"])
     await manager.broadcast_dashboard({"type": "agent.online", "agent_id": agent["id"]})
@@ -317,7 +351,7 @@ def _agent_owns_command(repo: Repository, agent_id: str, command_id: str | None)
 async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -> None:
     message_type = message.get("type")
     command_id = message.get("command_id")
-    if message_type in {"approval_response", "command_result", "stream_status", "stream_frame"} and not _agent_owns_command(repo, agent_id, command_id):
+    if message_type in {"approval_response", "command_result", "stream_status", "stream_frame", "agent_command_error"} and not _agent_owns_command(repo, agent_id, command_id):
         return
     if message_type == "agent_metadata":
         name = str(message.get("name") or "").strip()
@@ -334,7 +368,7 @@ async def handle_agent_message(repo: Repository, agent_id: str, message: dict) -
         raw_sessions = message.get("sessions")
         if not isinstance(raw_sessions, dict):
             return
-        sessions = {key: bool(raw_sessions.get(key)) for key in ("screen", "webcam", "activity", "keycapture")}
+        sessions = {key: bool(raw_sessions.get(key)) for key in ("screen", "webcam", "activity")}
         source = str(message.get("source") or "remote")
         manager.set_agent_sessions(agent_id, sessions)
         repo.audit("agent", "agent.session_state", agent_id, detail={"sessions": sessions, "source": source})

@@ -76,12 +76,12 @@ class AgentSidecar:
         self.bridge = bridge
         self.config = config or load_config()
         self.status = "Not connected"
-        self.keycapture_text = ""
+
         self.logs: list[dict[str, str]] = []
         self.activity = ActivityCapture(self._activity_event)
         self.handlers = CommandHandlers(self.config, self._provider)
         self.client = AgentClient(self.config, self.handlers, self._on_status, self._approval, self._webcam_request, self._on_session_change, self._on_command_error)
-        self._last_session_signature: tuple[bool, bool, bool, bool] | None = None
+        self._last_session_signature: tuple[bool, bool, bool] | None = None
         if hasattr(self.bridge, "closed"):
             threading.Thread(target=self._monitor_sessions, daemon=True).start()
 
@@ -116,7 +116,7 @@ class AgentSidecar:
     def _emit_session_state(self, force: bool = False, source: str = "remote") -> None:
         state = self.state()
         sessions = state["sessions"]
-        signature = (bool(sessions["screen"]), bool(sessions["webcam"]), bool(sessions["activity"]), bool(sessions["keycapture"]))
+        signature = (bool(sessions["screen"]), bool(sessions["webcam"]), bool(sessions["activity"]))
         if not force and signature == self._last_session_signature:
             return
         self._last_session_signature = signature
@@ -148,14 +148,7 @@ class AgentSidecar:
         if action == "screen_capture_restore_approval":
             self.bridge.request_ui("capture.restore_approval_windows", {}, timeout=5)
             return "restored"
-        if action == "start":
-            self.bridge.event("keycapture.started", {})
-            return "started"
-        if action == "stop":
-            self.bridge.event("keycapture.stopped", {})
-            return "stopped"
-        if action == "export":
-            return self.keycapture_text
+
         if action == "activity_start":
             status = self.activity.start()
             self.bridge.event("activity.started", {"status": status})
@@ -181,7 +174,7 @@ class AgentSidecar:
             "sessions": {
                 "screen": "screen" in self.client.active_streams,
                 "webcam": self.client.webcam_active,
-                "keycapture": self.client.keycapture_active,
+
                 "activity": self.client.activity_active or self.activity.active,
             },
             "logs": self.logs,
@@ -273,9 +266,7 @@ class AgentSidecar:
         if method == "webcam.error":
             self.client.fail_webcam_stream(str(params.get("error") or "Local camera capture failed"))
             return {"ok": True}
-        if method == "keycapture.update":
-            self.keycapture_text = str(params.get("text") or "")[-10000:]
-            return {"ok": True}
+
         if method == "agent.activity_stop_local":
             status = self.activity.stop()
             self.client.activity_active = False

@@ -8,6 +8,8 @@ services:
     envVars:
       - key: REMOTECTRL_SECRET_KEY
         generateValue: true
+      - key: REMOTECTRL_ENV
+        value: production
       - key: REMOTECTRL_ADMIN_EMAIL
         value: admin@remotectrl.local
       - key: REMOTECTRL_ADMIN_PASSWORD

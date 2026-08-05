@@ -104,6 +104,6 @@ export const demoState = {
     enrolled: false,
   },
   status: "Preparing Agent",
-  sessions: { screen: false, webcam: false, keycapture: false, activity: false },
+  sessions: { screen: false, webcam: false, activity: false },
   logs: [] as { message: string; level: string }[],
 }

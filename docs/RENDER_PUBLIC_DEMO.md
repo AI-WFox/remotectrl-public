@@ -34,6 +34,7 @@ Render deploys from a GitHub repository. Make sure these files are committed:
 Set these in Render:
 
 ```text
+REMOTECTRL_ENV=production
 REMOTECTRL_SECRET_KEY=<generated strong secret>
 REMOTECTRL_ADMIN_EMAIL=admin@remotectrl.local
 REMOTECTRL_ADMIN_PASSWORD=<strong password>
@@ -77,11 +78,10 @@ Enrollment token: <token from dashboard>
 
 4. Click `Enroll`, then `Connect`.
 
-The agent uses:
-
-```text
-wss://<your-render-service>.onrender.com/ws/agent?token=...
-```
+The Agent opens `wss://<your-render-service>.onrender.com/ws/agent` and sends its
+Agent credential in the first authenticated WebSocket message. The credential is
+not placed in the URL. The dashboard obtains a short-lived, one-time ticket from
+`POST /api/auth/ws-ticket` before opening `/ws/dashboard`.
 
 ## Demo Limits On Render Free
 

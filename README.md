@@ -21,8 +21,8 @@ Remote-control capabilities can be abused when implemented as hidden tooling. Re
 - Agents are visible desktop applications.
 - Remote actions require local approval by default.
 - Agent users can allow a command family for the current session only; approvals reset on disconnect/restart/manual reset.
-- Screen, webcam, files, applications, processes, power actions, and key-capture sessions are audited.
-- Key capture is demo-scoped and visible, not a background/global keylogger.
+- Screen, webcam, files, applications, processes, power actions, and visible Activity Capture sessions are audited.
+- Activity Capture is a visible, locally approved session; it is not a hidden keylogger.
 - File access is restricted to configured allowed folders.
 - Power commands default to dry-run mode until explicitly enabled.
 
@@ -60,13 +60,14 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
+$env:REMOTECTRL_ADMIN_PASSWORD = "<choose-a-local-password>"
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Default demo credentials:
+Unsafe local-development defaults (production startup rejects these values):
 
 - Email: `admin@remotectrl.local`
-- Password: `admin12345`
+- Password: the value set in `REMOTECTRL_ADMIN_PASSWORD`
 
 ### Web
 
@@ -86,11 +87,12 @@ The distributable Agent is the Tauri desktop app with a bundled Python core. Bui
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_agent_desktop.ps1
 ```
 
-Tester artifact:
+Tester artifacts are created locally in `release/`. Tagged builds are also published by
+`.github/workflows/release-agent.yml` on the repository GitHub Releases page:
 
 ```text
-release\RemoteCtrlAgent-Setup.exe
-release\RemoteCtrlAgent-Setup.exe.sha256
+RemoteCtrlAgent-Setup.exe
+RemoteCtrlAgent-Setup.exe.sha256
 ```
 
 For desktop development, see `docs/AGENT_DESKTOP.md`.
@@ -120,4 +122,4 @@ The E2E scripts cover both a mock WebSocket agent and the real headless agent co
 2. Open dashboard.
 3. Create or copy an enrollment token.
 4. Start agent app and enroll it with backend URL + token.
-5. Run commands with local approval: process list, applications list, file browse/download, screen/webcam live, key capture, and audit review.
+5. Run commands with local approval: process list, applications list, file browse/download, screen/webcam live, Activity Capture, and audit review.

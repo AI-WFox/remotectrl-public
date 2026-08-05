@@ -9,6 +9,15 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $BackendPython = Join-Path $Root "backend\.venv\Scripts\python.exe"
 $Npm = Join-Path $Root "tools\node-v24.16.0-win-x64\npm.cmd"
 
+if ([string]::IsNullOrWhiteSpace($env:REMOTECTRL_ADMIN_PASSWORD)) {
+    $env:REMOTECTRL_ADMIN_PASSWORD = "dev_$([Guid]::NewGuid().ToString('N'))"
+    Write-Host "Generated local admin password: $env:REMOTECTRL_ADMIN_PASSWORD"
+}
+if ([string]::IsNullOrWhiteSpace($env:REMOTECTRL_SECRET_KEY)) {
+    $env:REMOTECTRL_SECRET_KEY = "$([Guid]::NewGuid().ToString('N'))$([Guid]::NewGuid().ToString('N'))"
+}
+$env:REMOTECTRL_ENV = "development"
+
 if (!(Test-Path $BackendPython)) {
     throw "Backend venv not found. Run backend setup first: python -m venv backend\.venv; backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt"
 }

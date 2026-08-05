@@ -1,12 +1,20 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Node = Join-Path $Root "tools\node-v24.16.0-win-x64"
+$BundledNode = Join-Path $Root "tools\node-v24.16.0-win-x64"
 $CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-$env:PATH = "$Node;$CargoBin;$env:PATH"
+if (Test-Path (Join-Path $BundledNode "npm.cmd")) {
+    $Npm = Join-Path $BundledNode "npm.cmd"
+    $env:PATH = "$BundledNode;$CargoBin;$env:PATH"
+}
+else {
+    $NpmCommand = Get-Command npm.cmd -ErrorAction Stop
+    $Npm = $NpmCommand.Source
+    $env:PATH = "$CargoBin;$env:PATH"
+}
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\package_agent_core.ps1")
 if ($LASTEXITCODE -ne 0) { throw "Agent core packaging failed with exit code $LASTEXITCODE" }
 Push-Location (Join-Path $Root "agent-desktop")
-try { & (Join-Path $Node "npm.cmd") run tauri build } finally { Pop-Location }
+try { & $Npm run tauri build } finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS packaging failed with exit code $LASTEXITCODE" }
 
 $InstallerSource = Get-ChildItem -Path (Join-Path $Root "agent-desktop\src-tauri\target\release\bundle\nsis") -Filter "*-setup.exe" |

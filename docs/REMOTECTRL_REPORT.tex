@@ -1,0 +1,373 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vietnamese,english]{babel}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1.15in]{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage[htt]{hyphenat}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,shadows}
+
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\arraystretch}{1.25}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red!70!black},
+    commentstyle=\color{green!45!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    breaklines=true,
+    frame=single,
+    tabsize=2,
+    showstringspaces=false,
+    columns=fullflexible
+}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\placeholder}[1]{\textbf{[CẦN BỔ SUNG: #1]}}
+
+\title{RemoteCtrl\\\large Nền tảng điều khiển và giám sát máy tính từ xa}
+\author{\placeholder{tên nhóm và thành viên}}
+\date{\placeholder{ngày nộp}}
+
+\begin{document}
+\selectlanguage{vietnamese}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{THÔNG TIN NHÓM}
+
+\subsection{Thành viên nhóm}
+
+\begin{table}[H]
+\centering
+\caption{Phân công thành viên}
+\begin{tabularx}{\textwidth}{|p{0.24\textwidth}|p{0.18\textwidth}|Y|p{0.16\textwidth}|}
+\hline
+\textbf{Họ và tên} & \textbf{MSSV} & \textbf{Vai trò/đóng góp} & \textbf{Tỷ lệ}\\
+\hline
+\placeholder{thành viên 1} & \placeholder{MSSV} & Backend, WebSocket và database & \placeholder{\%}\\
+\hline
+\placeholder{thành viên 2} & \placeholder{MSSV} & Web Dashboard và UI realtime & \placeholder{\%}\\
+\hline
+\placeholder{thành viên 3} & \placeholder{MSSV} & Agent, desktop UI và kiểm thử & \placeholder{\%}\\
+\hline
+\end{tabularx}
+\end{table}
+
+\subsection{Tổng quan đồ án}
+
+RemoteCtrl là một nền tảng điều khiển và hỗ trợ máy tính từ xa, được xây dựng cho đồ án môn Mạng máy tính. Hệ thống gồm Web Dashboard dành cho người vận hành, FastAPI Gateway làm trung gian và Windows Agent chạy trên máy được quản lý. Mục tiêu chính là minh họa cách thiết kế kết nối mạng hai chiều, định tuyến lệnh tới đúng thiết bị, truyền dữ liệu realtime và ghi nhận đầy đủ lịch sử thao tác.
+
+Điểm thiết kế trung tâm của hệ thống là mô hình \textit{consent-first}. Các thao tác nhạy cảm không được thực hiện âm thầm: người dùng tại máy Agent phải nhìn thấy yêu cầu và lựa chọn cho phép hoặc từ chối. Cách tiếp cận này phù hợp với mục tiêu demo remote support minh bạch, đồng thời giới hạn rủi ro khi trình diễn.
+
+\subsection{Phân công công việc và đóng góp}
+
+Nội dung phân công chính xác của nhóm chưa nằm trong source repository. Nhóm cần bổ sung bảng thành viên ở trên trước khi nộp báo cáo. Về mặt kỹ thuật, project được chia thành các ownership area: Gateway/API và persistence, Web Dashboard, Agent Core/desktop, packaging và QA.
+
+\section{KIẾN TRÚC VÀ THIẾT KẾ HỆ THỐNG}
+
+\subsection{Kiến trúc tổng thể}
+
+RemoteCtrl sử dụng kiến trúc nhiều lớp:
+
+\begin{itemize}[leftmargin=*]
+    \item Web Dashboard gửi REST request và nhận sự kiện qua WebSocket.
+    \item FastAPI Gateway xác thực, lưu command/audit và định tuyến command.
+    \item Windows Agent tạo kết nối outbound tới Gateway, xử lý command cục bộ và gửi kết quả.
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=9mm and 15mm, every node/.style={font=\small},
+    box/.style={draw, rounded corners, fill=blue!7, minimum width=35mm, minimum height=11mm, align=center, drop shadow},
+    db/.style={draw, cylinder, shape border rotate=90, aspect=0.25, fill=green!8, minimum width=27mm, minimum height=12mm, align=center},
+    line/.style={-{Latex[length=2mm]}, thick}]
+    \node[box] (web) {React/Vite\\Web Dashboard};
+    \node[box, right=of web] (gateway) {FastAPI\\Gateway};
+    \node[db, below=of gateway] (db) {SQLite};
+    \node[box, right=of gateway] (desktop) {Tauri\\Agent Desktop};
+    \node[box, below=of desktop] (core) {Python\\Agent Core};
+    \node[box, right=of core] (windows) {Windows APIs\\Files / Process / Media / Power};
+    \draw[line] (web) -- node[above,align=center]{HTTPS REST\\WebSocket} (gateway);
+    \draw[line] (gateway) -- node[above]{WebSocket} (desktop);
+    \draw[line] (gateway) -- (db);
+    \draw[line] (desktop) -- node[right]{JSON Lines} (core);
+    \draw[line] (core) -- (windows);
+\end{tikzpicture}
+\caption{Kiến trúc RemoteCtrl}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Kiến trúc Web và Backend}
+
+Web Dashboard được viết bằng React và TypeScript, build bằng Vite. Web gọi các endpoint REST để login, tạo enrollment token, lấy danh sách Agent, tạo command và đọc audit. Một WebSocket dashboard nhận trạng thái Agent, command result, stream frame, activity event và metadata update.
+
+FastAPI Gateway là điểm điều phối duy nhất. Gateway không trực tiếp thực thi thao tác trên Windows; nó xác thực request, kiểm tra command catalog, lưu dữ liệu qua repository rồi gửi command tới socket của Agent được chọn. SQLite lưu users, agents, enrollment tokens dạng hash, commands và audit events.
+
+\subsection{Thiết kế ứng dụng Agent}
+
+Agent Desktop sử dụng Tauri 2 làm desktop shell, React làm giao diện và Python sidecar làm Agent Core. Tauri chịu trách nhiệm hiển thị settings, trạng thái kết nối, approval window, activity indicator và local privacy controls. Sidecar giữ logic WebSocket, command handler, approval cache, file whitelist, stream và activity capture.
+
+Tauri và sidecar giao tiếp bằng JSON Lines qua stdin/stdout. Stdout được dành cho các message protocol; các request UI như approval hoặc capture window có `request_id` để ghép response đúng yêu cầu.
+
+\subsection{Mô hình bảo mật và Consent}
+
+Agent hiển thị rõ trên máy Windows và không cung cấp cơ chế stealth. Command nhạy cảm cần local approval. Quyền `Allow once` chỉ áp dụng cho một command; `Allow for this session` được cache theo command cụ thể và reset khi disconnect, restart hoặc người dùng bấm reset. Audit lưu command, approval và kết quả.
+
+Files chỉ được truy cập trong allowed folders do người dùng Agent tự cấp. Power real mode tắt mặc định và phải được bật cục bộ; approval từ Web không tự bật chế độ này.
+
+\subsection{Giao thức giao tiếp}
+
+REST dùng cho thao tác request/response có cấu trúc. WebSocket dùng cho command và event realtime. Agent mở kết nối outbound tới Gateway nên không cần mở inbound service trên máy Agent.
+
+\subsection{Các nguyên lý thiết kế được áp dụng}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Separation of Concerns}: UI, protocol, handler, repository và session manager tách riêng.
+    \item \textbf{Layered Architecture}: Web, Gateway, Agent Desktop, Agent Core và OS handler có ranh giới rõ.
+    \item \textbf{Event-Driven Architecture}: trạng thái stream, activity, audit và command được broadcast bằng event.
+    \item \textbf{RESTful API}: các tài nguyên auth, Agent, command và audit có endpoint riêng.
+    \item \textbf{Repository Pattern}: truy cập SQLite tập trung trong repository service.
+    \item \textbf{Consent Boundary}: Agent user là người quyết định cuối cùng đối với thao tác nhạy cảm.
+\end{itemize}
+
+\section{CHI TIẾT TRIỂN KHAI HỆ THỐNG}
+
+\subsection{Tổng quan hoạt động}
+
+Quy trình demo bắt đầu khi Gateway được khởi động, Web Dashboard đăng nhập và tạo enrollment token. Agent user nhập Gateway URL/token trên Settings, enroll thiết bị rồi bấm Connect. Sau khi Web thấy Agent online, operator chọn một Agent cụ thể và tạo command. Gateway gửi command qua socket tương ứng. Nếu command cần approval, Agent Desktop mở prompt local; sau quyết định, Python handler thực thi và trả result.
+
+\subsection{Lưu đồ mạng và luồng dữ liệu}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=8mm, every node/.style={font=\small},
+    step/.style={draw, rounded corners, fill=blue!7, minimum width=55mm, minimum height=9mm, align=center},
+    line/.style={-{Latex[length=2mm]}, thick}]
+    \node[step] (one) {1. Web login và tạo enrollment token};
+    \node[step, below=of one] (two) {2. Agent enroll qua HTTPS};
+    \node[step, below=of two] (three) {3. Agent Connect mở WebSocket outbound};
+    \node[step, below=of three] (four) {4. Web tạo command cho Agent đã chọn};
+    \node[step, below=of four] (five) {5. Local approval tại Agent};
+    \node[step, below=of five] (six) {6. Handler chạy và gửi result/event};
+    \node[step, below=of six] (seven) {7. Gateway audit và broadcast về Web};
+    \foreach \a/\b in {one/two,two/three,three/four,four/five,five/six,six/seven} {\draw[line] (\a) -- (\b);}
+\end{tikzpicture}
+\caption{Luồng dữ liệu và command lifecycle}
+\label{fig:dataflow}
+\end{figure}
+
+\subsection{Kiến trúc giao diện người dùng}
+
+Web Dashboard có sidebar chọn Agent và module, workspace hiển thị module đang chọn, command timeline và audit trail. State stream được khóa theo cặp `agent_id + stream` để frame của Agent này không hiển thị sang Agent khác. Desktop có các trang Overview, Access \& Privacy, Activity và Settings; approval request được mở thành child window riêng.
+
+\subsubsection{Định tuyến và quản lý trạng thái Web Dashboard}
+
+Web giữ selected Agent, module result cache, stream frame/statistics, session state, activity events, command history và audit. Khi nhận event từ Gateway, Web cập nhật đúng record theo `agent_id`. Command button bị disable khi Agent offline hoặc session đang ở trạng thái không phù hợp.
+
+\subsubsection{Xác thực và Enrollment}
+
+Dashboard login bằng email/password. Sau khi login, operator tạo token mới. Token được copy sang Agent Desktop và chỉ dùng cho enrollment. Gateway không lưu raw enrollment token; Agent token sau enrollment được lưu hash ở Gateway.
+
+\subsubsection{Agent Desktop và Prompt}
+
+Approval dialog hiển thị command type, payload summary, cảnh báo audit và ba lựa chọn Deny, Allow once, Allow for this session. Nhiều request khác nhau có thể mở song song; request trùng được deduplicate theo command/payload.
+
+\subsection{Các tính năng của nền tảng}
+
+\subsubsection{Các thao tác quản lý từ xa cơ bản}
+
+\paragraph{Applications.} `app.list` enumerate visible windows. `app.start` dùng preset allowlist, hỗ trợ focus existing hoặc mở new instance. `app.stop` dùng PID và guarded process termination.
+
+\paragraph{Processes.} `process.list` trả process nền và visible apps, gồm PID, name, status, CPU và memory. Protected process như `lsass.exe`, `csrss.exe`, `svchost.exe` và `explorer.exe` không được terminate.
+
+\paragraph{Files.} `files.roots` trả allowed folders. `files.list` chỉ browse root hoặc descendant hợp lệ. `files.download` encode file thành base64, có giới hạn demo 10 MB, sau đó Web tạo browser download.
+
+\subsubsection{Tính năng giám sát và Streaming nâng cao}
+
+Screen screenshot/live dùng Pillow và JPEG. Live worker gửi frame qua WebSocket theo FPS được cấu hình. Webcam dùng camera backend trên Tauri WebView2, sau đó sidecar forward frame tới Gateway. Web hiển thị frame count, FPS, latency và hỗ trợ fullscreen.
+
+Activity Capture là visible session, thu active window, mouse click, keyboard key/shortcut và text segment. Text được tách theo window/click/shortcut; Backspace cập nhật segment hiện tại thay vì tạo draft rời.
+
+\subsubsection{Lệnh hệ thống và nguồn (Power Commands)}
+
+`power.status` trả CPU, uptime và battery. `shutdown`, `restart` và `sleep` mặc định ở dry-run. Real mode chỉ được bật local bởi Agent user và mỗi request vẫn cần approval. Test tự động chỉ mock command, không thực hiện thao tác nguy hiểm thật.
+
+\subsection{Hệ thống xử lý lệnh}
+
+\subsubsection{Định tuyến WebSocket và Dispatcher}
+
+Gateway lưu socket hiện tại theo `agent_id`. Khi Web tạo command, payload có `agent_id`; Gateway chỉ gửi command tới socket đó. Khi Agent trả result hoặc stream frame, Gateway kiểm tra `agent_id` của socket và `command_id` trước khi cập nhật database/broadcast.
+
+\subsubsection{Trình thực thi Action Executor}
+
+Python Core chuyển command type sang handler tương ứng. Các handler dùng Windows API/psutil/Pillow/WebView2 service hoặc filesystem. Handler trả payload có cấu trúc hoặc exception được chuyển thành `command_result` với `ok=false`.
+
+\subsection{Audit và an toàn}
+
+Audit events ghi login, enrollment metadata, command created, approval response, command result, stream lifecycle, session state, metadata update và lỗi ownership. Raw token không được ghi vào audit. Đây là lớp truy vết để operator và nhóm demo chứng minh command nào đã được gửi, ai approve và kết quả ra sao.
+
+\section{PROTOCOL VÀ API}
+
+\subsection{REST API chính}
+
+\begin{table}[H]
+\centering
+\caption{Các endpoint REST chính}
+\begin{tabularx}{\textwidth}{|p{0.13\textwidth}|p{0.31\textwidth}|Y|}
+\hline
+\textbf{Method} & \textbf{Endpoint} & \textbf{Chức năng}\\
+\hline
+GET & `/api/health` & Kiểm tra Gateway hoạt động.\\
+\hline
+POST & `/api/auth/login` & Đăng nhập dashboard.\\
+\hline
+POST & `/api/enrollment-tokens` & Tạo enrollment token.\\
+\hline
+POST & `/api/agents/enroll` & Enroll Agent bằng token.\\
+\hline
+GET & `/api/agents` & Lấy danh sách Agent.\\
+\hline
+POST & `/api/commands` & Tạo command tới Agent cụ thể.\\
+\hline
+GET & `/api/commands` & Lấy lịch sử command.\\
+\hline
+GET & `/api/audit` & Lấy audit trail.\\
+\hline
+\end{tabularx}
+\end{table}
+
+\subsection{WebSocket message}
+
+\begin{lstlisting}[language=json,caption={Command request với dữ liệu giả}]
+{
+  "command_id": "00000000-0000-0000-0000-000000000001",
+  "agent_id": "00000000-0000-0000-0000-000000000002",
+  "type": "process.list",
+  "payload": {},
+  "requires_approval": true
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=json,caption={Command result với dữ liệu giả}]
+{
+  "type": "command_result",
+  "command_id": "00000000-0000-0000-0000-000000000001",
+  "agent_id": "00000000-0000-0000-0000-000000000002",
+  "ok": true,
+  "payload": {"items": []},
+  "error": null
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=json,caption={Stream frame với dữ liệu giả}]
+{
+  "type": "stream_frame",
+  "command_id": "00000000-0000-0000-0000-000000000003",
+  "agent_id": "00000000-0000-0000-0000-000000000002",
+  "stream": "screen",
+  "mime": "image/jpeg",
+  "frame": "[BASE64_DEMO_DATA]",
+  "frame_index": 1
+}
+\end{lstlisting}
+
+\section{BẢO MẬT VÀ CONSENT}
+
+\subsection{Các cơ chế bảo vệ}
+
+Enrollment token và Agent token được hash trước khi lưu. Command catalog chỉ cho phép các command đã định nghĩa. Gateway kiểm tra quyền sở hữu command theo `agent_id` và `command_id`. Files dùng allowed root và path resolution để chống traversal. Process kill có protected list. Agent không mở inbound HTTP service.
+
+\subsection{Approval theo local user}
+
+Command nhạy cảm phải hiện approval prompt trên Agent. `Allow once` chỉ cấp quyền cho command hiện tại. `Allow for this session` chỉ áp dụng cho cùng command type trong phiên hiện tại. `Deny` hoặc đóng cửa sổ bằng X làm command bị từ chối. Session approvals reset khi Agent disconnect, restart hoặc người dùng chủ động reset.
+
+\subsection{Giới hạn bảo mật của bản demo}
+
+RemoteCtrl là prototype cho đồ án, chưa phải hệ thống production-secure. Bản demo còn cần hardening về RBAC, 2FA/OIDC, rate limiting, device attestation, signed installer/update, PostgreSQL persistence, secure cookie/session policy và secret management. Activity Capture là chức năng nhạy cảm nên chỉ được dùng trong visible session đã được Agent user approve.
+
+\section{QUÁ TRÌNH PHÁT TRIỂN}
+
+\subsection{Phương pháp phát triển}
+
+Phương pháp quản lý nhóm và quy trình Agile/Scrum chưa được xác nhận từ source. Nhóm cần bổ sung cách tổ chức sprint hoặc milestone nếu giảng viên yêu cầu: \placeholder{phương pháp phát triển của nhóm}.
+
+\subsection{Lập kế hoạch và phân tích yêu cầu}
+
+Yêu cầu được chia thành các nhóm: kết nối mạng, quản lý Agent, command execution, realtime media, file safety, consent/audit và packaging. Safety model được đặt ngang với chức năng điều khiển vì các thao tác như screen, webcam, files, activity và power có thể ảnh hưởng trực tiếp tới quyền riêng tư của người dùng.
+
+\subsection{Các giai đoạn triển khai}
+
+\begin{enumerate}[leftmargin=*]
+    \item Phân tích tài liệu mẫu và yêu cầu môn học.
+    \item Dựng FastAPI Gateway, SQLite và command catalog.
+    \item Xây dựng WebSocket routing và session manager.
+    \item Viết Python Agent Core và các action handlers.
+    \item Xây dựng React Web Dashboard.
+    \item Bổ sung consent, audit, session cache và allowed folders.
+    \item Thêm screen, webcam, activity và power modules.
+    \item Chuyển Agent UI sang Tauri + React.
+    \item Đóng gói Python sidecar bằng PyInstaller và Tauri bằng NSIS.
+    \item Viết unit, integration, E2E và UI smoke tests.
+\end{enumerate}
+
+\subsection{Công cụ và công nghệ}
+
+Stack chính gồm Python/FastAPI/Pydantic/Uvicorn, React/TypeScript/Vite, SQLite, WebSocket, Tauri/Rust/WebView2, PyInstaller, NSIS, Pillow, psutil, pynput, Playwright và pywinauto. Chi tiết vị trí và tác dụng của từng công nghệ được tổng hợp trong `docs/REMOTECTRL_REPORT_CONTEXT.md`.
+
+\subsection{Kiểm thử và gỡ lỗi}
+
+Repository có backend tests, agent tests, mock-agent E2E, headless-agent E2E, packaged desktop E2E và UI smoke test. Các test tập trung vào enrollment, routing nhiều Agent, approval, path traversal, process guard, stream lifecycle, activity segment, sidecar state, power mock và checksum installer.
+
+Các test đã được chuẩn bị trong repository nhưng cần nhóm chạy lại để xác nhận trạng thái tại thời điểm nộp báo cáo. Không ghi kết quả ``pass'' nếu không có log mới tương ứng.
+
+\section{HẠN CHẾ VÀ HƯỚNG PHÁT TRIỂN TƯƠNG LAI}
+
+\subsection{Các hạn chế hiện tại}
+
+\begin{itemize}[leftmargin=*]
+    \item Render Free có thể spin down; SQLite demo trên filesystem tạm có thể reset.
+    \item Frame JPEG base64 qua WebSocket tốn bandwidth hơn binary/WebRTC.
+    \item Webcam phụ thuộc phần cứng, driver, quyền camera và WebView2.
+    \item Agent hiện tập trung cho Windows/Tauri/NSIS.
+    \item Installer chưa code-sign nên Windows SmartScreen có thể cảnh báo.
+    \item Chưa có RBAC, 2FA, device attestation và rate limiting production.
+    \item Power thật nguy hiểm và chỉ nên kiểm thử bằng mock trong automated QA.
+\end{itemize}
+
+\subsection{Cải tiến tương lai}
+
+Các hướng hợp lý gồm dùng WebRTC hoặc binary WebSocket framing cho media, chuyển SQLite sang PostgreSQL managed, bổ sung OIDC/2FA/RBAC, ký installer và update, revoke Agent token, telemetry/observability, hỗ trợ Linux/macOS và mở rộng test matrix theo Windows version, camera driver và điều kiện mạng.
+
+\section{THÔNG TIN CẦN NHÓM BỔ SUNG TRƯỚC KHI NỘP BÁO CÁO}
+
+\begin{itemize}[leftmargin=*]
+    \item Tên thành viên, MSSV, vai trò và tỷ lệ đóng góp.
+    \item Link GitHub chính thức và public Render URL.
+    \item Kết quả test/build/E2E mới nhất có log hoặc ảnh minh chứng.
+    \item SHA-256 của installer phát hành.
+    \item Phiên bản Windows, Python, Node, Rust, WebView2 và browser dùng demo.
+    \item Ảnh Web Dashboard, Agent approval, screen/webcam stream và audit trail.
+    \item Số liệu FPS, latency, frame size hoặc bandwidth nếu nhóm có đo thực tế.
+    \item Bảng phân biệt tính năng demo thật, tính năng dry-run và tính năng mock.
+    \item Mô tả phương pháp phát triển và phân công thực tế của nhóm.
+\end{itemize}
+
+\end{document}

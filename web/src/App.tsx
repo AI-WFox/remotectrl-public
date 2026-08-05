@@ -23,7 +23,7 @@ import {
   Square,
   Sun,
 } from "lucide-react";
-import { ApiError, createCommand, createEnrollmentToken, dashboardWsUrl, deleteAgent, deleteOfflineAgents, loadDashboard, login } from "./lib/api";
+import { ApiError, createCommand, createDashboardWsTicket, createEnrollmentToken, dashboardWsUrl, deleteAgent, deleteOfflineAgents, loadDashboard, login } from "./lib/api";
 import { mockAgents, mockAudit, mockCommands } from "./lib/mock";
 import type { Agent, AuditEvent, Command } from "./lib/types";
 
@@ -33,7 +33,7 @@ const modules = [
   { id: "screen", label: "Screen", icon: Monitor, command: "screen.screenshot", safe: false },
   { id: "files", label: "Files", icon: FileDown, command: "files.roots", safe: false },
   { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.list", safe: false },
-  { id: "keycapture", label: "Activity Capture", icon: KeyRound, command: "activity.start", safe: false },
+  { id: "activity", label: "Activity Capture", icon: KeyRound, command: "activity.start", safe: false },
   { id: "power", label: "Power", icon: Power, command: "power.status", safe: false },
 ];
 
@@ -66,7 +66,7 @@ type StreamFrameMap = Record<string, StreamFrame>;
 type StreamStatsMap = Record<string, StreamStats>;
 type ActivityEvent = { time: string; type: string; detail: Record<string, unknown> };
 type ActivityEventMap = Record<string, ActivityEvent[]>;
-type AgentSessionState = { screen: boolean; webcam: boolean; activity: boolean; keycapture: boolean };
+type AgentSessionState = { screen: boolean; webcam: boolean; activity: boolean };
 type AgentSessionStateMap = Record<string, AgentSessionState>;
 type AppStartMode = "focus_existing" | "new_instance";
 
@@ -78,15 +78,15 @@ function streamStateKey(agentId: string, stream: StreamKind): string {
 
 export function App() {
   const [theme, setTheme] = useState<Theme>("light");
-  const [token, setToken] = useState<string>(() => localStorage.getItem("rt_token") ?? "");
-  const [demoMode, setDemoMode] = useState<boolean>(() => localStorage.getItem("rt_demo") === "true");
-  const [agents, setAgents] = useState<Agent[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockAgents : []));
-  const [commands, setCommands] = useState<Command[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockCommands : []));
-  const [audit, setAudit] = useState<AuditEvent[]>(() => (localStorage.getItem("rt_demo") === "true" ? mockAudit : []));
-  const [selectedAgentId, setSelectedAgentId] = useState(() => (localStorage.getItem("rt_demo") === "true" ? mockAgents[0].id : ""));
+  const [token, setToken] = useState<string>(() => sessionStorage.getItem("rt_token") ?? "");
+  const [demoMode, setDemoMode] = useState<boolean>(() => sessionStorage.getItem("rt_demo") === "true");
+  const [agents, setAgents] = useState<Agent[]>(() => (sessionStorage.getItem("rt_demo") === "true" ? mockAgents : []));
+  const [commands, setCommands] = useState<Command[]>(() => (sessionStorage.getItem("rt_demo") === "true" ? mockCommands : []));
+  const [audit, setAudit] = useState<AuditEvent[]>(() => (sessionStorage.getItem("rt_demo") === "true" ? mockAudit : []));
+  const [selectedAgentId, setSelectedAgentId] = useState(() => (sessionStorage.getItem("rt_demo") === "true" ? mockAgents[0].id : ""));
   const [selectedModule, setSelectedModule] = useState(modules[0].id);
   const [loginError, setLoginError] = useState("");
-  const [notice, setNotice] = useState("Demo data is loaded until the gateway responds.");
+  const [notice, setNotice] = useState(() => sessionStorage.getItem("rt_demo") === "true" ? "Demo mode is active." : "Connecting to the Gateway...");
   const [enrollmentToken, setEnrollmentToken] = useState("");
   const [moduleResultCache, setModuleResultCache] = useState<Record<string, Command>>({});
   const [appStartMode, setAppStartMode] = useState<AppStartMode>("focus_existing");
@@ -101,7 +101,7 @@ export function App() {
   const downloadedCommandIds = useRef<Set<string>>(new Set());
   const exportedActivityCommandIds = useRef<Set<string>>(new Set());
   const downloadEffectsReady = useRef(false);
-  const keycaptureActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
+  const activityActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -152,15 +152,29 @@ export function App() {
 
   useEffect(() => {
     if (!token || demoMode) return;
-    refresh(token);
-    const ws = new WebSocket(dashboardWsUrl());
-    ws.onmessage = (event) => {
+    let disposed = false;
+    let websocket: WebSocket | undefined;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryAttempt = 0;
+
+    const connectRealtime = async () => {
+      try {
+        const ticket = await createDashboardWsTicket(token);
+        if (disposed) return;
+        const ws = new WebSocket(dashboardWsUrl(ticket));
+        websocket = ws;
+        ws.onopen = () => {
+          retryAttempt = 0;
+          setNotice("Gateway connected. Realtime updates are active.");
+          refresh(token);
+        };
+        ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
         if (message.type === "agent.session_snapshot" && message.sessions && typeof message.sessions === "object") {
           const snapshot = message.sessions as Record<string, Record<string, unknown>>;
           const next: AgentSessionStateMap = {};
-          for (const [agentId, sessions] of Object.entries(snapshot)) next[agentId] = { screen: Boolean(sessions.screen), webcam: Boolean(sessions.webcam), activity: Boolean(sessions.activity), keycapture: Boolean(sessions.keycapture) };
+          for (const [agentId, sessions] of Object.entries(snapshot)) next[agentId] = { screen: Boolean(sessions.screen), webcam: Boolean(sessions.webcam), activity: Boolean(sessions.activity) };
           setAgentSessionStates(next);
           return;
         }
@@ -170,7 +184,7 @@ export function App() {
           const source = message.sessions as Record<string, unknown>;
           setAgentSessionStates((current) => ({
             ...current,
-            [agentId]: { screen: Boolean(source.screen), webcam: Boolean(source.webcam), activity: Boolean(source.activity), keycapture: Boolean(source.keycapture) },
+            [agentId]: { screen: Boolean(source.screen), webcam: Boolean(source.webcam), activity: Boolean(source.activity) },
           }));
           return;
         }
@@ -265,8 +279,43 @@ export function App() {
         // Ignore malformed realtime events and fall back to polling refresh.
       }
       refresh(token);
+        };
+        ws.onclose = (event) => {
+          if (disposed) return;
+          if (event.code === 4401 || event.code === 4403) {
+            setNotice("Realtime session expired. Sign in again.");
+            signOut();
+            return;
+          }
+          const delays = [1000, 2000, 5000, 10000];
+          const delay = delays[Math.min(retryAttempt, delays.length - 1)];
+          retryAttempt += 1;
+          setNotice("Realtime disconnected. Reconnecting...");
+          retryTimer = setTimeout(() => void connectRealtime(), delay);
+        };
+        ws.onerror = () => ws.close();
+      } catch (error) {
+        if (disposed) return;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          setNotice("Session expired or invalid. Sign in again.");
+          signOut();
+          return;
+        }
+        const delays = [1000, 2000, 5000, 10000];
+        const delay = delays[Math.min(retryAttempt, delays.length - 1)];
+        retryAttempt += 1;
+        setNotice("Realtime authentication failed. Retrying...");
+        retryTimer = setTimeout(() => void connectRealtime(), delay);
+      }
     };
-    return () => ws.close();
+
+    refresh(token);
+    void connectRealtime();
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      websocket?.close();
+    };
   }, [token, demoMode]);
 
   async function refresh(activeToken = token) {
@@ -295,16 +344,16 @@ export function App() {
         setNotice("Session expired or invalid. Sign out, then sign in again to create real enrollment tokens.");
         return;
       }
-      setAgents(mockAgents);
-      setCommands(mockCommands);
-      setAudit(mockAudit);
-      setNotice("Gateway unavailable. Showing premium demo data.");
+      setAgents([]);
+      setCommands([]);
+      setAudit([]);
+      setNotice("Gateway unavailable. Live controls are disabled. Use Demo mode explicitly from sign-in if needed.");
     }
   }
 
   function signOut() {
-    localStorage.removeItem("rt_token");
-    localStorage.removeItem("rt_demo");
+    sessionStorage.removeItem("rt_token");
+    sessionStorage.removeItem("rt_demo");
     setToken("");
     setDemoMode(false);
     setEnrollmentToken("");
@@ -323,8 +372,8 @@ export function App() {
     const form = new FormData(event.currentTarget);
     try {
       const nextToken = await login(String(form.get("email")), String(form.get("password")));
-      localStorage.setItem("rt_token", nextToken);
-      localStorage.removeItem("rt_demo");
+      sessionStorage.setItem("rt_token", nextToken);
+      sessionStorage.removeItem("rt_demo");
       setDemoMode(false);
       setToken(nextToken);
       setLoginError("");
@@ -335,8 +384,8 @@ export function App() {
   }
 
   function enterDemoMode() {
-    localStorage.setItem("rt_demo", "true");
-    localStorage.setItem("rt_token", "demo");
+    sessionStorage.setItem("rt_demo", "true");
+    sessionStorage.setItem("rt_token", "demo");
     setDemoMode(true);
     setToken("demo");
     setAgents(mockAgents);
@@ -360,7 +409,7 @@ export function App() {
       setNotice(`${startedStream} stream is already ${startedStreamStats.status}. Stop it before starting again.`);
       return;
     }
-    if ((commandType === "activity.start" || commandType === "keycapture.start") && keycaptureActive) {
+    if (commandType === "activity.start" && activityActive) {
       setNotice("Activity Capture session is already running. Stop it before starting again.");
       return;
     }
@@ -529,7 +578,7 @@ export function App() {
           </div>
           {agents.map((agent) => (
             <div key={agent.id} className={`agent-row ${agent.id === selectedAgentId ? "active" : ""}`}>
-              <button className="agent-pick" onClick={() => setSelectedAgentId(agent.id)}>
+              <button className="agent-pick" onClick={() => chooseAgent(agent.id)}>
                 <span className={`status-dot ${agent.status}`} />
                 <span>
                   <strong>{agent.name}</strong>
@@ -627,7 +676,7 @@ export function App() {
               streamStats={streamStats}
               activityEvents={selectedAgent ? activityEvents[selectedAgent.id] ?? [] : []}
               latestCommand={latestModuleCommand}
-              keycaptureActive={keycaptureActive}
+              activityActive={activityActive}
               appStartMode={appStartMode}
               setAppStartMode={setAppStartMode}
               commandDisabled={commandDisabled}
@@ -719,7 +768,7 @@ function ModuleSurface({
   streamStats,
   activityEvents,
   latestCommand,
-  keycaptureActive,
+  activityActive,
   appStartMode,
   setAppStartMode,
   commandDisabled,
@@ -732,7 +781,7 @@ function ModuleSurface({
   streamStats: StreamStatsMap;
   activityEvents: ActivityEvent[];
   latestCommand?: Command;
-  keycaptureActive: boolean;
+  activityActive: boolean;
   appStartMode: AppStartMode;
   setAppStartMode: (mode: AppStartMode) => void;
   commandDisabled: boolean;
@@ -741,7 +790,7 @@ function ModuleSurface({
   const previewRef = useRef<HTMLDivElement | null>(null);
   const canFullscreenPreview = module.id === "screen" || module.id === "webcam";
   const isLiveModule = module.id === "screen" || module.id === "webcam";
-  const isDataModule = ["applications", "processes", "files", "keycapture"].includes(module.id);
+  const isDataModule = ["applications", "processes", "files", "activity"].includes(module.id);
   const activeStream = isLiveModule ? (module.id as StreamKind) : null;
   const activeStreamKey = selectedAgent && activeStream ? streamStateKey(selectedAgent.id, activeStream) : null;
   const activeStats = activeStreamKey ? streamStats[activeStreamKey] ?? emptyStreamStats : emptyStreamStats;
@@ -773,7 +822,7 @@ function ModuleSurface({
       <div className={`module-preview ${isDataModule ? "data-layout" : ""}`}>
         <div className="module-actions">
           <div className="action-row">
-            {renderControls(module.id, runCommand, liveRunning, liveActive, keycaptureActive, appStartMode, setAppStartMode, commandDisabled, latestCommand)}
+            {renderControls(module.id, runCommand, liveRunning, liveActive, activityActive, appStartMode, setAppStartMode, commandDisabled, latestCommand)}
             <button className="secondary" onClick={() => refresh()}>Refresh audit trail</button>
           </div>
           {isLiveModule && (
@@ -807,7 +856,7 @@ function ModuleSurface({
               </div>
             </div>
           )}
-          {module.id === "keycapture" && <LiveActivityFeed events={activityEvents} />}
+          {module.id === "activity" && <LiveActivityFeed events={activityEvents} />}
           <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
         </div>
       </div>
@@ -815,7 +864,7 @@ function ModuleSurface({
   );
 }
 
-function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, keycaptureActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean, latestCommand?: Command) {
+function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, activityActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean, latestCommand?: Command) {
   if (moduleId === "screen" || moduleId === "webcam") {
     const webcamDiagnostics = moduleId === "webcam" ? latestCommand?.result : undefined;
     const isWebViewCamera = webcamDiagnostics?.capture_backend === "webview2";
@@ -893,11 +942,11 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
       </div>
     );
   }
-  if (moduleId === "keycapture") {
+  if (moduleId === "activity") {
     return (
       <div className="control-stack">
-        <button className="primary" onClick={() => runCommand("activity.start")} disabled={commandDisabled || keycaptureActive}>Start Activity Session</button>
-        <button className="secondary" onClick={() => runCommand("activity.stop")} disabled={commandDisabled || !keycaptureActive}>Stop Session</button>
+        <button className="primary" onClick={() => runCommand("activity.start")} disabled={commandDisabled || activityActive}>Start Activity Session</button>
+        <button className="secondary" onClick={() => runCommand("activity.stop")} disabled={commandDisabled || !activityActive}>Stop Session</button>
         <button className="secondary" onClick={() => runCommand("activity.export")} disabled={commandDisabled}>Export Activity</button>
       </div>
     );
@@ -931,8 +980,8 @@ function ResultView({ moduleId, command, runCommand }: { moduleId: string; comma
   if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} />;
   if (moduleId === "screen" || moduleId === "webcam") return <MediaResult command={command} />;
   if (moduleId === "power") return <PowerResult result={command.result} />;
-  if (moduleId === "keycapture" && command.type === "activity.export") return <div className="state-card"><strong>Activity export downloaded</strong><p>The current session log was saved to the browser download folder.</p></div>;
-  if (moduleId === "keycapture") return <KeyCaptureResult result={command.result} />;
+  if (moduleId === "activity" && command.type === "activity.export") return <div className="state-card"><strong>Activity export downloaded</strong><p>The current session log was saved to the browser download folder.</p></div>;
+  if (moduleId === "activity") return <ActivityResult result={command.result} />;
   return <DeveloperDetails result={command.result} />;
 }
 
@@ -1246,7 +1295,7 @@ function activityEventSummary(event: ActivityEvent): string {
   if (typeof detail.x === "number" && typeof detail.y === "number") return `Click at ${detail.x}, ${detail.y}`;
   return "Device activity";
 }
-function KeyCaptureResult({ result }: { result: Record<string, unknown> }) {
+function ActivityResult({ result }: { result: Record<string, unknown> }) {
   const events = asRecords(result.events).slice(-30).reverse();
   return (
     <div className="state-card">
@@ -1279,7 +1328,7 @@ function copyForModule(id: string): string {
     screen: "Capture screenshots or stream live after local consent.",
     files: "Choose an allowed root before browsing files.",
     webcam: "Check camera diagnostics before live capture.",
-    keycapture: "Visible activity capture session, never a hidden keylogger.",
+    activity: "Visible activity capture session, never a hidden keylogger.",
     power: "Request shutdown/restart/sleep with local confirmation.",
   };
   return copy[id] ?? "Remote operation surface.";
@@ -1292,7 +1341,7 @@ function moduleCommandTypes(moduleId: string): string[] {
     screen: ["screen.screenshot", "screen.live.start", "screen.live.stop"],
     files: ["files.roots", "files.list", "files.download"],
     webcam: ["webcam.list", "webcam.snapshot", "webcam.live.start", "webcam.live.stop"],
-    keycapture: ["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"],
+    activity: ["activity.start", "activity.stop", "activity.export"],
     power: ["power.status", "power.shutdown", "power.restart", "power.sleep"],
   };
   return map[moduleId] ?? [];
@@ -1313,7 +1362,7 @@ function cacheModuleForCommand(commandType: string): string | null {
   if (commandType === "files.roots" || commandType === "files.list") return "files";
   if (commandType === "webcam.list" || commandType === "webcam.snapshot") return "webcam";
   if (commandType === "screen.screenshot") return "screen";
-  if (["activity.start", "activity.stop", "activity.export", "keycapture.start", "keycapture.stop", "keycapture.export"].includes(commandType)) return "keycapture";
+  if (["activity.start", "activity.stop", "activity.export"].includes(commandType)) return "activity";
   if (commandType.startsWith("power.")) return "power";
   return null;
 }
@@ -1438,9 +1487,6 @@ function commandRequiresApproval(commandType: string): boolean {
     "webcam.live.start",
     "webcam.live.stop",
     "webcam.snapshot",
-    "keycapture.start",
-    "keycapture.stop",
-    "keycapture.export",
     "activity.start",
     "activity.stop",
     "activity.export",

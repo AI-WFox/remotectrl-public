@@ -25,6 +25,11 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class WebSocketTicketResponse(BaseModel):
+    ticket: str
+    expires_in: int
+
+
 class EnrollmentTokenCreate(BaseModel):
     label: str = "Demo enrollment"
     reusable: bool = False

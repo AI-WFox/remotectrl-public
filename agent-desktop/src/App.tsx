@@ -34,6 +34,7 @@ const approvalSlotsByKey = new Map<string, string>()
 
 function releaseApprovalSlot(label: string) {
   for (const [key, value] of approvalSlotsByKey) if (value === label) approvalSlotsByKey.delete(key)
+  localStorage.removeItem(`approval:${label}`)
 }
 
 const navItems: { id: Page; label: string; icon: typeof LaptopMinimal }[] = [
@@ -119,6 +120,9 @@ function AgentConsole() {
   }
 
   useEffect(() => {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("approval:")) localStorage.removeItem(key)
+    }
     const localBridge = new AgentBridge()
     bridge.current = localBridge
     webcam.current = new LocalWebcam(localBridge)

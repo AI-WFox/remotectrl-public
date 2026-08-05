@@ -89,6 +89,18 @@ export async function loadDashboard(token: string): Promise<{ agents: Agent[]; c
   return { agents, commands, audit };
 }
 
-export function dashboardWsUrl(): string {
-  return API_BASE.replace(/^http/, "ws") + "/ws/dashboard";
+export async function createDashboardWsTicket(token: string): Promise<string> {
+  const response = await fetch(`${API_BASE}/api/auth/ws-ticket`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw await readError(response, "Realtime authentication failed");
+  const data = await response.json();
+  return String(data.ticket);
+}
+
+export function dashboardWsUrl(ticket: string): string {
+  const url = new URL(API_BASE.replace(/^http/, "ws") + "/ws/dashboard");
+  url.searchParams.set("ticket", ticket);
+  return url.toString();
 }

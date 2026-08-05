@@ -36,7 +36,8 @@ def wait_for_gateway(timeout_seconds: float = 15.0) -> None:
 
 
 async def run_agent_session_ready(agent_token: str, command_type: str, ready: threading.Event) -> dict:
-    async with websockets.connect(f"{WS_URL}?token={agent_token}") as websocket:
+    async with websockets.connect(WS_URL) as websocket:
+        await websocket.send(json.dumps({"type": "authenticate", "token": agent_token}))
         hello = json.loads(await websocket.recv())
         if hello.get("role") != "agent":
             raise AssertionError(f"Unexpected hello: {hello}")
@@ -104,6 +105,7 @@ def main() -> int:
     env = os.environ.copy()
     env["REMOTECTRL_DB"] = str(db_path)
     env["REMOTECTRL_SECRET_KEY"] = "e2e-secret"
+    env["REMOTECTRL_ADMIN_PASSWORD"] = "e2e-only-admin-password"
 
     process = subprocess.Popen(
         [
@@ -129,7 +131,7 @@ def main() -> int:
         with httpx.Client(base_url=BASE_URL, timeout=5.0) as client:
             login = client.post(
                 "/api/auth/login",
-                json={"email": "admin@remotectrl.local", "password": "admin12345"},
+                json={"email": "admin@remotectrl.local", "password": "e2e-only-admin-password"},
             )
             login.raise_for_status()
             token = login.json()["access_token"]

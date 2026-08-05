@@ -26,7 +26,7 @@ Prerequisites: Node 24, Rust stable MSVC, Python environment at `agent/.venv`.
 powershell -ExecutionPolicy Bypass -File scripts\package_agent_desktop.ps1
 ```
 
-The command first packages the Python core with PyInstaller, including OpenCV, NumPy, Pillow, psutil and pynput. It then builds the Tauri NSIS installer and embeds a WebView2 bootstrapper.
+The command first packages the Python core with PyInstaller, including Pillow, psutil and pynput. Webcam capture uses the Tauri WebView2 media API, so tester machines do not need a separate OpenCV installation. It then builds the Tauri NSIS installer and embeds a WebView2 bootstrapper.
 
 ## Output
 
@@ -44,3 +44,9 @@ agent\.venv\Scripts\python.exe scripts\ui_smoke_agent.py
 ```
 
 The smoke test launches the built Tauri executable with an isolated `APPDATA` directory, verifies its four console pages, then exits.
+## Automated Release
+
+Pushing a tag such as `v0.2.1` runs `.github/workflows/release-agent.yml`.
+The workflow builds the Python sidecar and NSIS installer on Windows, verifies the
+package step, uploads the installer/checksum as a workflow artifact, and publishes
+both files to GitHub Releases.

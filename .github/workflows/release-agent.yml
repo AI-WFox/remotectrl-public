@@ -1,0 +1,74 @@
+name: Build Windows Agent Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-agent:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: agent-desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Agent Core dependencies
+        shell: pwsh
+        run: |
+          python -m venv agent/.venv
+          agent/.venv/Scripts/python.exe -m pip install --upgrade pip
+          agent/.venv/Scripts/python.exe -m pip install -r agent/requirements.txt
+          agent/.venv/Scripts/python.exe -m pip install pytest
+
+      - name: Install Agent Desktop dependencies
+        working-directory: agent-desktop
+        run: npm ci
+
+      - name: Run Agent tests
+        shell: pwsh
+        run: agent/.venv/Scripts/python.exe -m pytest agent/tests
+
+      - name: Build NSIS installer and checksum
+        shell: pwsh
+        run: ./scripts/package_agent_desktop.ps1
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteCtrlAgent-Windows
+          path: |
+            release/RemoteCtrlAgent-Setup.exe
+            release/RemoteCtrlAgent-Setup.exe.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/RemoteCtrlAgent-Setup.exe
+            release/RemoteCtrlAgent-Setup.exe.sha256

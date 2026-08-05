@@ -75,6 +75,7 @@ def start_gateway(work_dir: Path) -> subprocess.Popen[object]:
         {
             "REMOTECTRL_DB": str(work_dir / "gateway.db"),
             "REMOTECTRL_SECRET_KEY": "desktop-e2e-secret",
+            "REMOTECTRL_ADMIN_PASSWORD": "e2e-only-admin-password",
             "REMOTECTRL_CORS_ORIGINS": WEB_URL,
         }
     )
@@ -230,7 +231,7 @@ def run_approved(page: Page, agent_process: subprocess.Popen[object], module: st
     page.get_by_role("button", name=action, exact=True).click()
     if requires_approval:
         approve_next(agent_process, command)
-    dashboard_token = page.evaluate("localStorage.getItem('rt_token')")
+    dashboard_token = page.evaluate("sessionStorage.getItem('rt_token')")
     if not isinstance(dashboard_token, str):
         raise E2EFailure("Dashboard session token disappeared during command test.")
     terminal = wait_for_terminal_command(dashboard_token, command, timeout=result_timeout_ms / 1000)
@@ -291,7 +292,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             log("opening dashboard in Chrome")
             page.goto(WEB_URL, wait_until="networkidle")
             page.get_by_label("Email").fill("admin@remotectrl.local")
-            page.get_by_label("Password").fill("admin12345")
+            page.get_by_label("Password").fill("e2e-only-admin-password")
             page.get_by_role("button", name="Sign in", exact=True).click()
             page.get_by_role("button", name="Create enrollment token", exact=True).wait_for(timeout=12_000)
             page.get_by_role("button", name="Create enrollment token", exact=True).click()
@@ -318,7 +319,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             time.sleep(1)
             immediate_controls = [item.window_text() for item in desktop_window.descendants() if item.window_text()]
             log(f"Agent controls after Reconnect: {immediate_controls[-20:]}")
-            dashboard_token = page.evaluate("localStorage.getItem('rt_token')")
+            dashboard_token = page.evaluate("sessionStorage.getItem('rt_token')")
             if not isinstance(dashboard_token, str):
                 raise E2EFailure("Dashboard did not store an authenticated session token.")
             try:

@@ -11,7 +11,6 @@ New-Item -ItemType Directory -Path $BinaryDir -Force | Out-Null
   --console `
   --hide-console hide-early `
   --name remotectrl-agent-core `
-  --collect-all numpy `
   --collect-all PIL `
   --hidden-import pynput.keyboard._win32 `
   --hidden-import pynput.mouse._win32 `
