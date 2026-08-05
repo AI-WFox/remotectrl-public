@@ -1197,8 +1197,8 @@ function buildPathBreadcrumb(rawPath: string, rootPath?: string): { label: strin
   if (!normalizedRoot || !isPathInsideRoot(normalized, normalizedRoot)) return [virtualRoot];
 
   const rootParts = splitWindowsPath(normalizedRoot);
-  const rootLabel = /^[A-Za-z]:$/.test(normalizedRoot)
-    ? normalizedRoot
+  const rootLabel = /^[A-Za-z]:\\$/.test(normalizedRoot)
+    ? normalizedRoot.slice(0, 2)
     : rootParts[rootParts.length - 1] || normalizedRoot;
   const parts: { label: string; path: string }[] = [virtualRoot, { label: rootLabel, path: normalizedRoot }];
   const relative = normalized.slice(normalizedRoot.length).replace(/^\\+/, "");
@@ -1212,7 +1212,9 @@ function buildPathBreadcrumb(rawPath: string, rootPath?: string): { label: strin
 }
 
 function normalizeWindowsPath(value: string): string {
-  return value.replace(/\//g, "\\").replace(/\\+$/g, "");
+  const normalized = value.replace(/\//g, "\\");
+  if (/^[A-Za-z]:\\+$/.test(normalized)) return `${normalized.slice(0, 2)}\\`;
+  return normalized.replace(/\\+$/g, "");
 }
 
 function splitWindowsPath(value: string): string[] {
@@ -1233,7 +1235,8 @@ function joinWindowsParts(parts: string[]): string {
 function isPathInsideRoot(path: string, root: string): boolean {
   const left = normalizeWindowsPath(path).toLowerCase();
   const right = normalizeWindowsPath(root).toLowerCase();
-  return left === right || left.startsWith(`${right}\\`);
+  const descendantPrefix = right.endsWith("\\") ? right : `${right}\\`;
+  return left === right || left.startsWith(descendantPrefix);
 }
 
 function DownloadResult({ result }: { result: Record<string, unknown> }) {

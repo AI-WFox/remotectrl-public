@@ -112,7 +112,7 @@ def write_agent_config(appdata: Path, allowed_folder: Path, agent_id: str, agent
         f'  "agent_id": "{agent_id}",\n'
         f'  "agent_token": "{agent_token}",\n'
         f'  "agent_name": "{AGENT_NAME}",\n'
-        f'  "allowed_folders": ["{allowed_folder.as_posix()}"],\n'
+        f'  "allowed_folders": ["{allowed_folder.as_posix()}", "C:/"],\n'
         "  \"paused\": false,\n"
         "  \"dry_run_power\": true,\n"
         "  \"ui_theme\": \"light\",\n"
@@ -226,9 +226,12 @@ def approve_next(process: subprocess.Popen[object], expected_command: str) -> No
             except Exception:
                 pass
     raise E2EFailure(f"Approval window did not appear for {expected_command}; visible windows: {titles}; approval controls: {approval_controls}")
-def run_approved(page: Page, agent_process: subprocess.Popen[object], module: str, action: str, command: str, expected: str, requires_approval: bool = True, result_timeout_ms: int = 25_000) -> None:
+def run_approved(page: Page, agent_process: subprocess.Popen[object], module: str, action: str, command: str, expected: str, requires_approval: bool = True, result_timeout_ms: int = 25_000, row_text: str | None = None) -> dict:
     page.get_by_role("button", name=module, exact=True).click()
-    page.get_by_role("button", name=action, exact=True).click()
+    action_button = page.get_by_role("button", name=action, exact=True)
+    if row_text is not None:
+        action_button = page.locator(".result-row").filter(has_text=row_text).get_by_role("button", name=action, exact=True)
+    action_button.click()
     if requires_approval:
         approve_next(agent_process, command)
     dashboard_token = page.evaluate("sessionStorage.getItem('rt_token')")
@@ -241,6 +244,7 @@ def run_approved(page: Page, agent_process: subprocess.Popen[object], module: st
     page.get_by_text(expected, exact=True).first.wait_for(timeout=12_000)
     if requires_approval:
         page.get_by_text("approval.response", exact=True).first.wait_for(timeout=12_000)
+    return terminal
 
 
 def wait_for_activity_indicator(process: subprocess.Popen[object], visible: bool, timeout: float = 10.0) -> None:
@@ -339,13 +343,17 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             run_approved(page, agent_process, "Applications", "Refresh Applications", "app.list", "Running applications")
             run_approved(page, agent_process, "Processes", "Refresh Processes", "process.list", "Background processes")
             run_approved(page, agent_process, "Files", "Choose Folder", "files.roots", "Choose an allowed folder")
-            run_approved(page, agent_process, "Files", "Open", "files.list", "e2e.txt")
+            run_approved(page, agent_process, "Files", "Open", "files.list", "e2e.txt", row_text=allowed_folder.name)
             visible_files_text = page.locator(".module-panel").inner_text()
             if str(allowed_folder) in visible_files_text:
                 raise E2EFailure("Web Files exposed the absolute allowed-folder path in visible UI text.")
-            run_approved(page, agent_process, "Files", "Open", "files.list", "inside.txt")
+            run_approved(page, agent_process, "Files", "Open", "files.list", "inside.txt", row_text="nested")
             run_approved(page, agent_process, "Files", allowed_folder.name, "files.list", "e2e.txt")
             run_approved(page, agent_process, "Files", "Allowed folders", "files.roots", "Choose an allowed folder")
+            run_approved(page, agent_process, "Files", "Open", "files.list", "Windows", row_text="C:\\")
+            drive_command = run_approved(page, agent_process, "Files", "C:", "files.list", "Windows")
+            if drive_command.get("payload", {}).get("path") != "C:\\":
+                raise E2EFailure(f"Drive-root breadcrumb sent an invalid path: {drive_command.get('payload')}")
             run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")
