@@ -10,15 +10,19 @@ if (!(Test-Path $Npm)) { $Npm = "npm" }
 
 Write-Host "Running Python tests..."
 & $BackendPython -m pytest backend\tests agent\tests
+if ($LASTEXITCODE -ne 0) { throw "Python tests failed with exit code $LASTEXITCODE" }
 
 Write-Host "Running E2E mock-agent flow..."
 & $BackendPython (Join-Path $Root "scripts\e2e_mock_agent.py")
+if ($LASTEXITCODE -ne 0) { throw "Mock Agent E2E failed with exit code $LASTEXITCODE" }
 
 Write-Host "Running E2E headless real-agent flow..."
 & $AgentPython (Join-Path $Root "scripts\e2e_headless_agent.py")
+if ($LASTEXITCODE -ne 0) { throw "Headless Agent E2E failed with exit code $LASTEXITCODE" }
 
 Write-Host "Running agent UI smoke test..."
 & $AgentPython (Join-Path $Root "scripts\ui_smoke_agent.py")
+if ($LASTEXITCODE -ne 0) { throw "Agent UI smoke failed with exit code $LASTEXITCODE" }
 
 Write-Host "Building dashboard..."
 $nodeDir = Join-Path $Root "tools\node-v24.16.0-win-x64"
@@ -26,13 +30,16 @@ $env:PATH = "$nodeDir;$env:PATH"
 Push-Location (Join-Path $Root "web")
 try {
     & $Npm run build
+    $DashboardBuildExitCode = $LASTEXITCODE
 }
 finally {
     Pop-Location
 }
+if ($DashboardBuildExitCode -ne 0) { throw "Dashboard build failed with exit code $DashboardBuildExitCode" }
 
 Write-Host "Running packaged desktop E2E..."
 & $AgentPython -u (Join-Path $Root "scripts\e2e_web_agent_desktop.py") --extended
+if ($LASTEXITCODE -ne 0) { throw "Packaged desktop E2E failed with exit code $LASTEXITCODE" }
 
 Write-Host "Checking Tauri/NSIS release artifacts..."
 $DesktopExe = Join-Path $Root "agent-desktop\src-tauri\target\release\remotectrl-agent-desktop.exe"

@@ -336,9 +336,13 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             assert_no_horizontal_overflow(page, 1920, 1080)
 
             log("checking Web command routing and approval dialogs")
-            run_approved(page, agent_process, "Applications", "Refresh Applications", "app.list", "Visible windows")
+            run_approved(page, agent_process, "Applications", "Refresh Applications", "app.list", "Running applications")
             run_approved(page, agent_process, "Processes", "Refresh Processes", "process.list", "Background processes")
             run_approved(page, agent_process, "Files", "Choose Folder", "files.roots", "Choose an allowed folder")
+            run_approved(page, agent_process, "Files", "Open", "files.list", "e2e.txt")
+            visible_files_text = page.locator(".module-panel").inner_text()
+            if str(allowed_folder) in visible_files_text:
+                raise E2EFailure("Web Files exposed the absolute allowed-folder path in visible UI text.")
             run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")

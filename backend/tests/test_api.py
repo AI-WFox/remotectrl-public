@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.core.db import init_db
 from app.main import app, settings
 from app.services.repository import Repository
@@ -187,3 +188,88 @@ def test_delete_single_agent_removes_record_and_commands(tmp_path):
     assert deleted.json()["deleted"] is True
     assert repo.get_agent(agent_id) is None
     assert repo.list_agent_commands(agent_id) == []
+
+
+def test_command_submission_deduplicates_active_requests_and_rate_limits_bursts(tmp_path, monkeypatch):
+    settings.database_path = tmp_path / "command-pressure.db"
+    init_db(settings.database_path)
+    repo = Repository(settings.database_path)
+    repo.ensure_admin("pressure@remotectrl.local", "admin12345")
+    _record, enrollment_token = repo.create_enrollment_token("pressure", reusable=True)
+
+    async def pretend_online(_agent_id, _message):
+        return True
+
+    monkeypatch.setattr(main_module.manager, "send_to_agent", pretend_online)
+    main_module._command_attempts.clear()
+    client = TestClient(app)
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "pressure@remotectrl.local", "password": "admin12345"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    enrolled = client.post(
+        "/api/agents/enroll",
+        json={
+            "enrollment_token": enrollment_token,
+            "name": "Pressure Agent",
+            "hostname": "pressure-host",
+            "os": "Windows",
+        },
+    )
+    agent_id = enrolled.json()["agent_id"]
+
+    payload = {"preset": "notepad", "mode": "focus_existing"}
+    first = client.post("/api/commands", headers=headers, json={"agent_id": agent_id, "type": "app.start", "payload": payload})
+    duplicate = client.post("/api/commands", headers=headers, json={"agent_id": agent_id, "type": "app.start", "payload": payload})
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert len(repo.list_agent_commands(agent_id)) == 1
+
+    main_module._command_attempts.clear()
+    responses = [
+        client.post(
+            "/api/commands",
+            headers=headers,
+            json={"agent_id": agent_id, "type": "process.kill", "payload": {"pid": 1000 + index}},
+        )
+        for index in range(main_module.COMMAND_RATE_LIMIT + 1)
+    ]
+    assert all(response.status_code == 200 for response in responses[:-1])
+    assert responses[-1].status_code == 429
+    assert responses[-1].headers["retry-after"] == "1"
+
+def test_command_rate_limit_buckets_are_bounded_and_expire(monkeypatch):
+    main_module._command_attempts.clear()
+    main_module._command_rate_last_cleanup = 0.0
+    now = {"value": 100.0}
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: now["value"])
+
+    for index in range(main_module.COMMAND_RATE_MAX_BUCKETS):
+        assert main_module._consume_command_budget(f"operator:agent-{index}") is True
+    assert main_module._consume_command_budget("operator:overflow") is False
+    assert len(main_module._command_attempts) == main_module.COMMAND_RATE_MAX_BUCKETS
+
+    now["value"] += main_module.COMMAND_RATE_WINDOW_SECONDS
+    assert main_module._consume_command_budget("operator:overflow") is True
+    assert list(main_module._command_attempts) == ["operator:overflow"]
+
+
+def test_repository_fails_active_commands_when_agent_disconnects(tmp_path):
+    database = tmp_path / "disconnect-commands.db"
+    init_db(database)
+    repo = Repository(database)
+    _record, enrollment_token = repo.create_enrollment_token("disconnect", reusable=True)
+    enrolled = repo.enroll_agent(enrollment_token, "Agent", "host", "Windows", None)
+    assert enrolled is not None
+    agent, _token = enrolled
+    command = repo.create_command(agent["id"], "screen.live.start", {}, "operator@test")
+    repo.update_command(command["id"], "running")
+
+    failed = repo.fail_active_commands_for_agent(agent["id"])
+
+    assert [item["id"] for item in failed] == [command["id"]]
+    assert repo.get_command(command["id"])["status"] == "failed"
+    assert repo.get_command(command["id"])["error"] == "Agent disconnected"

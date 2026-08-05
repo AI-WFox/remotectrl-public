@@ -186,6 +186,47 @@ class Repository:
             row = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
             return row_to_dict(row) if row else None
 
+    def find_active_duplicate_command(
+        self,
+        agent_id: str,
+        command_type: str,
+        payload: dict[str, Any],
+        created_by: str,
+    ) -> dict[str, Any] | None:
+        active_statuses = ("queued", "sent", "pending_approval", "running")
+        placeholders = ",".join("?" for _ in active_statuses)
+        with session(self.database_path) as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM commands
+                    WHERE agent_id=? AND type=? AND created_by=?
+                      AND status IN ({placeholders})
+                    ORDER BY created_at DESC LIMIT 25""",
+                (agent_id, command_type, created_by, *active_statuses),
+            ).fetchall()
+        for row in rows:
+            decoded = self._decode_command(row_to_dict(row))
+            if decoded.get("payload") == payload:
+                return decoded
+        return None
+
+    def fail_active_commands_for_agent(self, agent_id: str, error: str = "Agent disconnected") -> list[dict[str, Any]]:
+        active_statuses = ("queued", "sent", "pending_approval", "running")
+        placeholders = ",".join("?" for _ in active_statuses)
+        updated_at = now_iso()
+        with session(self.database_path) as conn:
+            rows = conn.execute(
+                f"SELECT id FROM commands WHERE agent_id=? AND status IN ({placeholders})",
+                (agent_id, *active_statuses),
+            ).fetchall()
+            command_ids = [str(row["id"]) for row in rows]
+            if command_ids:
+                ids = ",".join("?" for _ in command_ids)
+                conn.execute(
+                    f"UPDATE commands SET status='failed', error=?, updated_at=? WHERE id IN ({ids})",
+                    (error, updated_at, *command_ids),
+                )
+        return [self.get_command(command_id) for command_id in command_ids]
+
     def create_command(self, agent_id: str, command_type: str, payload: dict[str, Any], created_by: str) -> dict[str, Any]:
         if not self.get_agent(agent_id):
             raise KeyError(f"Unknown agent: {agent_id}")
@@ -195,7 +236,7 @@ class Repository:
             "id": str(uuid.uuid4()),
             "agent_id": agent_id,
             "type": command_type,
-            "payload": json.dumps(payload),
+            "payload": json.dumps(payload, sort_keys=True, separators=(",", ":")),
             "requires_approval": 1 if requires_approval else 0,
             "status": "queued",
             "result": None,

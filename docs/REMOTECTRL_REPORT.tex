@@ -194,7 +194,7 @@ Approval dialog hiển thị command type, payload summary, cảnh báo audit v�
 
 \subsubsection{Các thao tác quản lý từ xa cơ bản}
 
-\paragraph{Applications.} `app.list` enumerate visible windows. `app.start` dùng preset allowlist, hỗ trợ focus existing hoặc mở new instance. `app.stop` dùng PID và guarded process termination.
+\paragraph{Applications.} app.list enumerate visible windows rồi gom theo logical app. app.start dùng preset allowlist, hỗ trợ focus existing hoặc new instance. app.stop nhận app_key, đóng mọi cửa sổ cùng app và guarded-terminate process còn lại, trừ protected/shared Windows hosts.
 
 \paragraph{Processes.} `process.list` trả process nền và visible apps, gồm PID, name, status, CPU và memory. Protected process như `lsass.exe`, `csrss.exe`, `svchost.exe` và `explorer.exe` không được terminate.
 
@@ -297,7 +297,7 @@ Enrollment token và Agent token được hash trước khi lưu. Command catalo
 
 \subsection{Approval theo local user}
 
-Command nhạy cảm phải hiện approval prompt trên Agent. `Allow once` chỉ cấp quyền cho command hiện tại. `Allow for this session` chỉ áp dụng cho cùng command type trong phiên hiện tại. `Deny` hoặc đóng cửa sổ bằng X làm command bị từ chối. Session approvals reset khi Agent disconnect, restart hoặc người dùng chủ động reset.
+Command nhạy cảm phải hiện approval prompt trên Agent. Allow once chỉ cấp quyền cho command hiện tại. Allow for this session chỉ áp dụng cho cùng command và resource scope. Approval window không cho đóng bằng X/Alt+F4; người dùng phải chọn Deny, Allow once hoặc Allow for this session.
 
 \subsection{Giới hạn bảo mật của bản demo}
 

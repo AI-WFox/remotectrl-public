@@ -32,11 +32,17 @@ def main() -> int:
         power_toggle.wait("enabled", timeout=8)
         power_toggle.click_input()
         window.child_window(title="Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.", control_type="Text").wait("visible", timeout=8)
-        window.child_window(title="Enable real mode", control_type="Button").click_input()
-        window.child_window(title="Refresh state", control_type="Button").click_input()
-        time.sleep(1)
-        control_texts = [control.window_text() for control in window.descendants() if control.window_text()]
-        if "enabled on this device" not in control_texts:
+        confirm_text = window.child_window(title="Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.", control_type="Text")
+        window.child_window(title="Enable real mode", control_type="Button").invoke()
+        confirm_text.wait_not("visible", timeout=8)
+        deadline = time.monotonic() + 8
+        control_texts = []
+        while time.monotonic() < deadline:
+            control_texts = [control.window_text() for control in window.descendants() if control.window_text()]
+            if any("enabled on this device" in text for text in control_texts):
+                break
+            time.sleep(0.2)
+        if not any("enabled on this device" in text for text in control_texts):
             raise RuntimeError(f"Power safety did not update after confirmation: {control_texts[-60:]}")
         child_pids = {child.pid for child in psutil.Process(process.pid).children(recursive=True)}
         console_windows = []

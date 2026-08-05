@@ -314,7 +314,7 @@ class AgentClient:
 
     def _approval_decision(self, message: dict) -> dict[str, Any]:
         command_type = message.get("command_type", "")
-        family = self._approval_family(command_type)
+        family = self._approval_family(command_type, message.get("payload") or {})
         with self.state_lock:
             if family in self.session_approvals:
                 return {"approved": True, "approval_mode": "session_cached", "policy_scope": "current_session"}
@@ -332,9 +332,22 @@ class AgentClient:
             "policy_scope": policy_scope,
         }
 
-    def _approval_family(self, command_type: str) -> str:
-        # Session grants are intentionally command-specific: starting a stream never grants stopping it.
-        return command_type
+    def _approval_family(self, command_type: str, payload: dict[str, Any] | None = None) -> str:
+        """Return the narrowest stable scope that can be reused for this session."""
+        payload = payload or {}
+        scoped: dict[str, Any] = {}
+        if command_type == "app.start":
+            scoped = {"preset": payload.get("preset"), "path": str(payload.get("path") or "").strip().lower(), "mode": payload.get("mode")}
+        elif command_type == "app.stop":
+            scoped = {"app_key": payload.get("app_key")}
+        elif command_type == "process.kill":
+            scoped = {"pid": payload.get("pid")}
+        elif command_type in {"files.list", "files.download"}:
+            scoped = {"path": str(payload.get("path") or "").strip().lower()}
+        elif command_type.startswith("webcam."):
+            scoped = {"device_id": payload.get("device_id"), "camera_index": payload.get("camera_index")}
+        scope = json.dumps(scoped, sort_keys=True, separators=(",", ":"), default=str)
+        return f"{command_type}:{scope}"
 
     def publish_agent_event(self, event_type: str, payload: dict[str, Any] | None = None) -> bool:
         with self.state_lock:
@@ -400,6 +413,12 @@ class AgentClient:
         self._notify_session_change()
         return {"stream": stream, "status": "stop_requested"}
 
+    def stop_stream_local(self, stream: str, local_capture_stopped: bool = False) -> dict[str, Any]:
+        if stream not in {"screen", "webcam"}:
+            raise ValueError("stream must be screen or webcam")
+        if stream == "webcam":
+            return self._stop_tauri_webcam(local_capture_stopped=local_capture_stopped)
+        return self._stop_stream(f"{stream}.live.stop")
     def _stop_all_streams(self) -> None:
         if self.webcam_stream is not None:
             try:
@@ -454,13 +473,14 @@ class AgentClient:
         self._report_command_error("webcam.live.start", error)
         self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "failed", "fps": stream["fps"], "error": error})
         self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], False, error=error))
-    def _stop_tauri_webcam(self) -> dict[str, Any]:
+    def _stop_tauri_webcam(self, local_capture_stopped: bool = False) -> dict[str, Any]:
         with self.state_lock:
             stream = self.webcam_stream
         if not stream:
             return {"stream": "webcam", "status": "not_running"}
         try:
-            self._webcam_request("stop", {})
+            if not local_capture_stopped:
+                self._webcam_request("stop", {})
         finally:
             with self.state_lock:
                 self.webcam_stream = None

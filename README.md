@@ -20,7 +20,7 @@ Remote-control capabilities can be abused when implemented as hidden tooling. Re
 
 - Agents are visible desktop applications.
 - Remote actions require local approval by default.
-- Agent users can allow a command family for the current session only; approvals reset on disconnect/restart/manual reset.
+- Agent users can allow a specific command/resource scope for the current session only; approvals reset on disconnect/restart/manual reset.
 - Screen, webcam, files, applications, processes, power actions, and visible Activity Capture sessions are audited.
 - Activity Capture is a visible, locally approved session; it is not a hidden keylogger.
 - File access is restricted to configured allowed folders.

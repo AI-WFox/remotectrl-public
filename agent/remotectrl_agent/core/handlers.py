@@ -24,6 +24,7 @@ SYSTEM_PROCESS_NAMES = {
     "lsass.exe",
     "svchost.exe",
     "explorer.exe",
+    "applicationframehost.exe",
 }
 
 APP_PRESETS = {
@@ -42,7 +43,7 @@ APP_PRESETS = {
 }
 
 APP_TITLE_ALIASES = {
-    "notepad": ["notepad", "untitled"],
+    "notepad": ["notepad"],
     "calculator": ["calculator"],
     "paint": ["paint"],
     "explorer": ["file explorer", "this pc", "downloads", "documents"],
@@ -62,7 +63,7 @@ class CommandHandlers:
             "process.kill": self.process_kill,
             "app.list": self.app_list,
             "app.start": self.app_start,
-            "app.stop": self.process_kill,
+            "app.stop": self.app_stop,
             "screen.screenshot": self.screen_screenshot,
             "screen.live.start": self.screen_screenshot,
             "files.roots": self.files_roots,
@@ -119,26 +120,154 @@ class CommandHandlers:
         try:
             import psutil
 
-            proc = psutil.Process(pid)
-            name = proc.name().lower()
+            try:
+                proc = psutil.Process(pid)
+                name = proc.name().lower()
+            except psutil.NoSuchProcess:
+                return {"pid": pid, "name": "unknown", "status": "already_stopped"}
             if name in SYSTEM_PROCESS_NAMES:
                 raise PermissionError(f"Refusing to stop protected process: {name}")
-            proc.terminate()
-            return {"pid": pid, "name": name, "status": "terminate_requested"}
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.AccessDenied as exc:
+                raise PermissionError(f"Windows denied permission to stop {name} (PID {pid})") from exc
+            except psutil.TimeoutExpired as exc:
+                raise RuntimeError(f"Process {name} (PID {pid}) did not stop within 2 seconds") from exc
+            return {"pid": pid, "name": name, "status": "stopped"}
         except ImportError:
             raise RuntimeError("psutil is required for guarded process kill")
-
     def app_list(self, _payload: dict[str, Any]) -> dict[str, Any]:
         if os.name != "nt":
-            return {"items": [], "count": 0, "source": "unsupported"}
+            return {"items": [], "count": 0, "window_count": 0, "source": "unsupported"}
         try:
-            items = self._visible_windows()
-            return {"items": items, "count": len(items), "source": "win32"}
+            windows = self._visible_windows()
+            source = "win32"
+            fallback_error = None
         except Exception as exc:
             fallback = self._app_list_powershell()
-            fallback["fallback_error"] = str(exc)
-            return fallback
+            windows = fallback.get("items", [])
+            source = str(fallback.get("source") or "powershell")
+            fallback_error = str(exc)
+        items = self._group_visible_apps(windows)
+        result: dict[str, Any] = {
+            "items": items,
+            "count": len(items),
+            "window_count": len(windows),
+            "source": source,
+        }
+        if fallback_error:
+            result["fallback_error"] = fallback_error
+        return result
 
+    def _group_visible_apps(self, windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for window in windows:
+            app_key = self._app_identity(window)
+            if not app_key:
+                continue
+            item = grouped.setdefault(
+                app_key,
+                {"app_key": app_key, "name": self._app_display_name(app_key), "window_count": 0, "process_names": []},
+            )
+            item["window_count"] = int(item["window_count"]) + 1
+            process_name = str(window.get("name") or "").strip()
+            if process_name and process_name not in item["process_names"]:
+                item["process_names"].append(process_name)
+        return sorted(grouped.values(), key=lambda item: str(item["name"]).lower())
+
+    def _app_identity(self, window: dict[str, Any]) -> str:
+        process_name = self._normalize_process_name(str(window.get("name") or ""))
+        title = str(window.get("title") or "").strip().lower()
+        for preset, candidates in APP_PRESETS.items():
+            candidate_names = {
+                self._normalize_process_name(Path(candidate).name)
+                for candidate in candidates
+            }
+            if process_name in candidate_names or (process_name == "applicationframehost" and any(alias in title for alias in APP_TITLE_ALIASES.get(preset, []))):
+                return preset
+        return process_name
+
+    @staticmethod
+    def _app_display_name(app_key: str) -> str:
+        names = {
+            "notepad": "Notepad",
+            "calculator": "Calculator",
+            "paint": "Paint",
+            "explorer": "File Explorer",
+            "chrome": "Chrome",
+            "brave": "Brave",
+        }
+        return names.get(app_key, app_key.replace("-", " ").replace("_", " ").title())
+
+    def app_stop(self, payload: dict[str, Any]) -> dict[str, Any]:
+        app_key = str(payload.get("app_key") or "").strip().lower()
+        if not app_key:
+            raise ValueError("app_key is required")
+        windows = [window for window in self._visible_windows() if self._app_identity(window) == app_key]
+        if not windows:
+            return {"app_key": app_key, "name": self._app_display_name(app_key), "status": "already_stopped", "closed_windows": 0, "terminated_processes": 0}
+
+        process_names = sorted({
+            str(window.get("name") or "").strip()
+            for window in windows
+            if str(window.get("name") or "").strip()
+        })
+        closed_windows = 0
+        if os.name == "nt":
+            import ctypes
+            user32 = ctypes.windll.user32
+            WM_CLOSE = 0x0010
+            for window in windows:
+                hwnd = int(window.get("hwnd") or 0)
+                if hwnd and user32.PostMessageW(hwnd, WM_CLOSE, 0, 0):
+                    closed_windows += 1
+
+        remaining = self._wait_for_app_windows_to_close(app_key, timeout=2.0)
+        remaining_before_terminate = len(remaining)
+        terminated_processes = 0
+        if remaining and app_key != "explorer":
+            try:
+                import psutil
+
+                remaining_process_names = {
+                    str(window.get("name") or "").strip().lower()
+                    for window in remaining
+                    if str(window.get("name") or "").strip()
+                }
+                for proc in psutil.process_iter(["pid", "name"]):
+                    name = str(proc.info.get("name") or "").strip().lower()
+                    if name in remaining_process_names and name not in SYSTEM_PROCESS_NAMES:
+                        proc.terminate()
+                        terminated_processes += 1
+            except ImportError as exc:
+                raise RuntimeError("psutil is required to close all processes for an application") from exc
+            remaining = self._wait_for_app_windows_to_close(app_key, timeout=2.0)
+
+        if remaining:
+            raise RuntimeError(
+                f"{self._app_display_name(app_key)} still has {len(remaining)} visible window(s) after the close request"
+            )
+        return {
+            "app_key": app_key,
+            "name": self._app_display_name(app_key),
+            "status": "stopped",
+            "closed_windows": closed_windows,
+            "terminated_processes": terminated_processes,
+            "process_names": process_names,
+            "remaining_windows_before_terminate": remaining_before_terminate,
+            "remaining_windows": 0,
+        }
+
+    def _wait_for_app_windows_to_close(self, app_key: str, timeout: float) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while True:
+            remaining = [window for window in self._visible_windows() if self._app_identity(window) == app_key]
+            if not remaining or time.monotonic() >= deadline:
+                return remaining
+            time.sleep(0.1)
     def _app_list_powershell(self) -> dict[str, Any]:
         ps = (
             "Get-Process | Where-Object {$_.MainWindowTitle} | "
@@ -432,10 +561,10 @@ class CommandHandlers:
         if preset:
             target_titles.update(APP_TITLE_ALIASES.get(preset, []))
         target_titles.discard("")
-        for item in self.app_list({}).get("items", []):
+        for item in self._visible_windows():
             name = self._normalize_process_name(str(item.get("name") or ""))
             title = str(item.get("title") or "").lower()
-            if name in target_names or any(alias in title for alias in target_titles):
+            if name in target_names or (name == "applicationframehost" and any(alias in title for alias in target_titles)):
                 return item
         return None
 

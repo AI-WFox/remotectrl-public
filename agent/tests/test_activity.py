@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from remotectrl_agent.core.activity import ActivityCapture
 
 
@@ -56,3 +58,12 @@ def test_backspace_keeps_typing_in_one_realtime_text_segment() -> None:
     assert exported[0]["detail"]["text"] == "hello!"
     assert exported[0]["detail"]["segment_id"] == drafts[-1]["detail"]["segment_id"]
     assert not any(event["type"] == "keyboard.key" and event["detail"].get("key") == "Backspace" for event in emitted)
+
+
+def test_raw_virtual_key_ignores_ime_transformed_unicode() -> None:
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=67, char="c")) == "c"
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=72, char="h")) == "h"
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=65, char="a")) == "a"
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=79, char="ò")) == "o"
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=70, char="à")) == "f"
+    assert ActivityCapture._raw_printable_key(SimpleNamespace(vk=65, char="a"), shift=True) == "A"

@@ -36,7 +36,7 @@ local approval trên máy Agent.
 
 - **Deny**: từ chối command.
 - **Allow once**: chỉ cho command hiện tại.
-- **Allow for this session**: chỉ cache đúng command type trong phiên kết nối hiện tại.
+- **Allow for this session**: chỉ cache đúng command type và resource đã duyệt trong phiên kết nối hiện tại; quyền cho một app/path không áp dụng sang app/path khác.
 - Đóng dialog bằng **X** được xử lý như Deny.
 - Start và Stop là hai quyền riêng; cho phép Start không tự cho phép Stop.
 

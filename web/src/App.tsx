@@ -72,6 +72,21 @@ type AppStartMode = "focus_existing" | "new_instance";
 
 const emptyStreamStats: StreamStats = { status: "idle", fps: 0, frames: 0, latencyMs: 0 };
 
+function stablePayload(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(stablePayload).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => JSON.stringify(key) + ":" + stablePayload(item))
+      .join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function commandRequestKey(agentId: string, commandType: string, payload: Record<string, unknown>): string {
+  return agentId + ":" + commandType + ":" + stablePayload(payload);
+}
+
 function streamStateKey(agentId: string, stream: StreamKind): string {
   return `${agentId || "unknown"}:${stream}`;
 }
@@ -100,6 +115,8 @@ export function App() {
   const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0], [agents, selectedAgentId]);
   const downloadedCommandIds = useRef<Set<string>>(new Set());
   const exportedActivityCommandIds = useRef<Set<string>>(new Set());
+  const commandRequestsInFlight = useRef<Set<string>>(new Set());
+  const recentCommandRequests = useRef<Map<string, number>>(new Map());
   const downloadEffectsReady = useRef(false);
   const activityActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
 
@@ -450,12 +467,22 @@ export function App() {
       setNotice(`${selectedAgent.name} is offline. Select an online agent before running commands.`);
       return;
     }
+    const requestKey = commandRequestKey(selectedAgent.id, commandType, payload);
+    const lastRequestAt = recentCommandRequests.current.get(requestKey) ?? 0;
+    if (commandRequestsInFlight.current.has(requestKey) || Date.now() - lastRequestAt < 350) {
+      setNotice(commandType + " is already being submitted. Wait for the current request.");
+      return;
+    }
+    commandRequestsInFlight.current.add(requestKey);
+    recentCommandRequests.current.set(requestKey, Date.now());
     try {
       const command = await createCommand(token, selectedAgent.id, commandType, payload);
-      setCommands((items) => [command, ...items]);
-      setNotice(`${commandType} sent to ${selectedAgent.name}.`);
+      setCommands((items) => [command, ...items.filter((item) => item.id !== command.id)]);
+      setNotice(commandType + " sent to " + selectedAgent.name + ".");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Command failed.");
+    } finally {
+      commandRequestsInFlight.current.delete(requestKey);
     }
   }
 
@@ -547,14 +574,20 @@ export function App() {
   const onlineCount = agents.filter((agent) => agent.status === "online").length;
   const pendingApprovals = commands.filter((command) => command.status === "pending_approval").length;
   const activeModule = modules.find((item) => item.id === selectedModule) ?? modules[0];
+  const powerStatusCommand = selectedAgent
+    ? commands.find((command) => command.agent_id === selectedAgent.id && command.type === "power.status" && command.status === "succeeded" && command.result)
+    : undefined;
   const latestModuleCommand = selectedAgent
-    ? moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)]
-      ?? commands.find((command) => (
-        command.agent_id === selectedAgent.id
-        && moduleCommandTypes(selectedModule).includes(command.type)
-        && !(selectedAgent.status === "online" && command.status === "failed" && command.error === "Agent offline")
-      ))
-      ?? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type))
+    ? selectedModule === "power"
+      ? commands.find((command) => command.agent_id === selectedAgent.id && command.type.startsWith("power."))
+        ?? powerStatusCommand
+      : moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)]
+        ?? commands.find((command) => (
+          command.agent_id === selectedAgent.id
+          && moduleCommandTypes(selectedModule).includes(command.type)
+          && !(selectedAgent.status === "online" && command.status === "failed" && command.error === "Agent offline")
+        ))
+        ?? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type))
     : undefined;
   const commandDisabled = !selectedAgent || (!demoMode && selectedAgent.status !== "online");
 
@@ -676,6 +709,7 @@ export function App() {
               streamStats={streamStats}
               activityEvents={selectedAgent ? activityEvents[selectedAgent.id] ?? [] : []}
               latestCommand={latestModuleCommand}
+              powerStatusCommand={powerStatusCommand}
               activityActive={activityActive}
               appStartMode={appStartMode}
               setAppStartMode={setAppStartMode}
@@ -768,6 +802,7 @@ function ModuleSurface({
   streamStats,
   activityEvents,
   latestCommand,
+  powerStatusCommand,
   activityActive,
   appStartMode,
   setAppStartMode,
@@ -781,6 +816,7 @@ function ModuleSurface({
   streamStats: StreamStatsMap;
   activityEvents: ActivityEvent[];
   latestCommand?: Command;
+  powerStatusCommand?: Command;
   activityActive: boolean;
   appStartMode: AppStartMode;
   setAppStartMode: (mode: AppStartMode) => void;
@@ -857,7 +893,7 @@ function ModuleSurface({
             </div>
           )}
           {module.id === "activity" && <LiveActivityFeed events={activityEvents} />}
-          <ResultView moduleId={module.id} command={latestCommand} runCommand={runCommand} />
+          <ResultView moduleId={module.id} command={latestCommand} powerStatusCommand={powerStatusCommand} runCommand={runCommand} />
         </div>
       </div>
     </>
@@ -954,7 +990,10 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   return <button className="primary" onClick={() => runCommand("process.list")} disabled={commandDisabled}>Run</button>;
 }
 
-function ResultView({ moduleId, command, runCommand }: { moduleId: string; command?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+function ResultView({ moduleId, command, powerStatusCommand, runCommand }: { moduleId: string; command?: Command; powerStatusCommand?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+  if (moduleId === "power") {
+    return <PowerResult command={command} telemetry={powerStatusCommand?.result} />;
+  }
   if (!command) {
     return <div className="empty-result">Run a command to show live results here.</div>;
   }
@@ -979,39 +1018,41 @@ function ResultView({ moduleId, command, runCommand }: { moduleId: string; comma
   if (command.type === "files.download") return <DownloadResult result={command.result} />;
   if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} />;
   if (moduleId === "screen" || moduleId === "webcam") return <MediaResult command={command} />;
-  if (moduleId === "power") return <PowerResult result={command.result} />;
   if (moduleId === "activity" && command.type === "activity.export") return <div className="state-card"><strong>Activity export downloaded</strong><p>The current session log was saved to the browser download folder.</p></div>;
   if (moduleId === "activity") return <ActivityResult result={command.result} />;
   return <DeveloperDetails result={command.result} />;
 }
 
 function ApplicationsResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const items = asRecords(result.items).slice(0, 20);
+  const items = asRecords(result.items).slice(0, 40);
   return (
     <div className="result-list">
-      <div className="result-list-heading"><strong>Visible windows</strong><span>{Number(result.count ?? items.length)} found</span></div>
-      {items.map((item) => (
-        <div className="result-row" key={`${item.pid}-${item.title}`}>
-          <div className="row-main">
-            <strong>{String(item.title || item.name || "Untitled window")}</strong>
-            <div className="row-meta">
-              <span>{String(item.name ?? "unknown")}</span>
-              <span>PID {String(item.pid ?? "-")}</span>
+      <div className="result-list-heading"><strong>Running applications</strong><span>{Number(result.count ?? items.length)} found</span></div>
+      {items.map((item) => {
+        const appKey = String(item.app_key ?? "");
+        const appName = String(item.name || appKey || "Unknown application");
+        const windows = Number(item.window_count ?? 1);
+        return (
+          <div className="result-row" key={appKey}>
+            <div className="row-main">
+              <strong>{appName}</strong>
+              <div className="row-meta"><span>{windows} visible window{windows === 1 ? "" : "s"}</span></div>
             </div>
+            <button className="row-action" onClick={() => confirmAndRun("Close all windows for " + appName + "?", () => runCommand("app.stop", { app_key: appKey }))}>Close all</button>
           </div>
-          <button className="row-action" onClick={() => confirmAndRun("Stop this app window?", () => runCommand("app.stop", { pid: item.pid }))}>Stop</button>
-        </div>
-      ))}
+        );
+      })}
+      {!items.length && <div className="empty-result">No visible applications found.</div>}
       <DeveloperDetails result={result} />
     </div>
   );
 }
 
 function ProcessesResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
-  const apps = asRecords(result.apps).slice(0, 20);
-  const appPids = new Set(apps.map((item) => String(item.pid)));
+  const apps = asRecords(result.apps).slice(0, 40);
+  const appProcessNames = new Set(apps.flatMap((item) => Array.isArray(item.process_names) ? item.process_names.map((name) => String(name).toLowerCase()) : []));
   const items = asRecords(result.items)
-    .filter((item) => String(item.name ?? "").trim() && !appPids.has(String(item.pid)))
+    .filter((item) => String(item.name ?? "").trim() && !appProcessNames.has(String(item.name ?? "").toLowerCase()))
     .sort((left, right) => {
       const leftName = String(left.name ?? "").toLowerCase();
       const rightName = String(right.name ?? "").toLowerCase();
@@ -1024,37 +1065,37 @@ function ProcessesResult({ result, runCommand }: { result: Record<string, unknow
   return (
     <div className="result-list split-list">
       <div className="result-list-heading"><strong>Running apps</strong><span>{apps.length}/{Number(result.app_count ?? apps.length)} shown</span></div>
-      {apps.map((item) => (
-        <div className="result-row app-row" key={`app-${item.pid}-${item.title}`}>
-          <div className="row-main">
-            <strong>{String(item.title || item.name || "Untitled app")}</strong>
-            <div className="row-meta"><span>{String(item.name ?? "unknown")}</span><span>PID {String(item.pid ?? "-")}</span></div>
+      {apps.map((item) => {
+        const appKey = String(item.app_key ?? "");
+        const appName = String(item.name || appKey || "Unknown application");
+        const windows = Number(item.window_count ?? 1);
+        return (
+          <div className="result-row app-row" key={"app-" + appKey}>
+            <div className="row-main">
+              <strong>{appName}</strong>
+              <div className="row-meta"><span>{windows} visible window{windows === 1 ? "" : "s"}</span></div>
+            </div>
+            <button className="row-action" onClick={() => confirmAndRun("Close all windows for " + appName + "?", () => runCommand("app.stop", { app_key: appKey }))}>Close all</button>
           </div>
-          <button className="row-action" onClick={() => confirmAndRun("Stop this app window?", () => runCommand("app.stop", { pid: item.pid }))}>Stop</button>
-        </div>
-      ))}
-      {!apps.length && <div className="empty-result">No visible app windows match.</div>}
+        );
+      })}
+      {!apps.length && <div className="empty-result">No visible applications found.</div>}
       <div className="result-list-heading secondary-heading"><strong>Background processes</strong><span>{items.length}/{Number(result.count ?? items.length)} shown</span></div>
       {items.map((item) => {
         const name = String(item.name ?? "").toLowerCase();
         const protectedProcess = protectedProcessNames.has(name);
         return (
-          <div className={`result-row ${protectedProcess ? "guarded-row" : ""}`} key={`${item.pid}-${item.name}`}>
+          <div className={"result-row " + (protectedProcess ? "guarded-row" : "")} key={String(item.pid) + "-" + String(item.name)}>
             <div className="row-main">
               <strong>{String(item.name ?? "Unknown process")}</strong>
               <div className="row-meta">
                 <span>PID {String(item.pid ?? "-")}</span>
-                <span>{Number(item.memory_mb ?? 0).toFixed(1)} MB RAM</span>
+                <span>{formatBytes(Number(item.memory_mb ?? 0) * 1024 * 1024)}</span>
+                <span>{String(item.cpu ?? 0)}% CPU</span>
                 <span>{String(item.status ?? "unknown")}</span>
               </div>
             </div>
-            <button
-              className="row-action danger"
-              disabled={protectedProcess}
-              onClick={() => confirmAndRun(`Kill process ${item.name} (${item.pid})?`, () => runCommand("process.kill", { pid: item.pid }))}
-            >
-              {protectedProcess ? "Guarded" : "Kill"}
-            </button>
+            <button className={"row-action " + (protectedProcess ? "guarded" : "")} disabled={protectedProcess} onClick={() => confirmAndRun("Kill process " + String(item.name) + " (PID " + String(item.pid) + ")?", () => runCommand("process.kill", { pid: item.pid }))}>{protectedProcess ? "Guarded" : "Kill"}</button>
           </div>
         );
       })}
@@ -1084,7 +1125,7 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
           <div className="result-row" key={String(root.path)}>
             <div className="row-main">
               <strong className="entry-name"><Folder size={17} /> {String(root.name || root.path)}</strong>
-              <div className="row-meta"><span>{root.exists ? "Available" : "Missing"}</span><span>{String(root.path)}</span></div>
+              <div className="row-meta"><span>{root.exists ? "Available" : "Missing"}</span><span>Locally approved root</span></div>
             </div>
             <button className="row-action" disabled={!root.exists || !root.is_dir} onClick={() => runCommand("files.list", { path: root.path })}>Open</button>
           </div>
@@ -1095,7 +1136,7 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
   }
   return (
     <div className="result-list">
-      <div className="result-list-heading"><strong>{String(result.path ?? "Allowed folder")}</strong><span>{entries.length} entries</span></div>
+      <div className="result-list-heading"><strong>{displayAllowedPath(result.path, result.allowed_root)}</strong><span>{entries.length} entries</span></div>
       {typeof result.path === "string" && <FileBreadcrumb path={result.path} rootPath={typeof result.allowed_root === "string" ? result.allowed_root : undefined} runCommand={runCommand} />}
       {entries.map((entry) => (
         <div className="result-row" key={String(entry.path ?? entry.name)}>
@@ -1104,7 +1145,7 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
             <div className="row-meta">
               <span>{entry.is_dir ? "Folder" : "File"}</span>
               <span>{formatBytes(Number(entry.size ?? 0))}</span>
-              <span>{String(entry.path ?? "")}</span>
+
             </div>
           </div>
           {entry.is_dir ? (
@@ -1120,13 +1161,19 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
 }
 
 
+function displayAllowedPath(rawPath: unknown, rawRoot: unknown): string {
+  if (typeof rawPath !== "string" || typeof rawRoot !== "string") return "Allowed folder";
+  const parts = buildPathBreadcrumb(rawPath, rawRoot).slice(1).map((part) => part.label);
+  return parts.length ? parts.join(" / ") : "Allowed folder";
+}
+
 function FileBreadcrumb({ path, rootPath, runCommand }: { path: string; rootPath?: string; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
   const parts = buildPathBreadcrumb(path, rootPath);
   if (!parts.length) return null;
   return (
     <div className="file-breadcrumb" aria-label="Current directory">
       {parts.map((part, index) => (
-        <button key={`${part.path}-${index}`} onClick={() => index === 0 ? runCommand("files.roots") : runCommand("files.list", { path: part.path })} title={index === 0 ? "Return to allowed folders" : "Open this folder"}>
+        <button key={`${part.path}-${index}`} onClick={() => !part.path ? runCommand("files.roots") : runCommand("files.list", { path: part.path })} title={index === 0 ? "Return to allowed folders" : "Open this folder"}>
           {part.label}
         </button>
       ))}
@@ -1136,14 +1183,21 @@ function FileBreadcrumb({ path, rootPath, runCommand }: { path: string; rootPath
 
 function buildPathBreadcrumb(rawPath: string, rootPath?: string): { label: string; path: string }[] {
   const normalized = normalizeWindowsPath(rawPath);
-  const normalizedRoot = rootPath ? normalizeWindowsPath(rootPath) : normalized;
-  if (!normalizedRoot || !isPathInsideRoot(normalized, normalizedRoot)) return [{ label: "Allowed folders", path: normalized }];
+  const normalizedRoot = rootPath ? normalizeWindowsPath(rootPath) : "";
+  const virtualRoot = { label: "Allowed folders", path: "" };
+  if (!normalizedRoot || !isPathInsideRoot(normalized, normalizedRoot)) return [virtualRoot];
+
   const rootParts = splitWindowsPath(normalizedRoot);
-  const currentParts = splitWindowsPath(normalized);
-  const rootLabel = rootParts[rootParts.length - 1] || normalizedRoot;
-  const parts: { label: string; path: string }[] = [{ label: "Allowed folders", path: normalizedRoot }, { label: rootLabel, path: normalizedRoot }];
-  for (let index = rootParts.length; index < currentParts.length; index += 1) {
-    parts.push({ label: currentParts[index], path: joinWindowsParts(currentParts.slice(0, index + 1)) });
+  const rootLabel = /^[A-Za-z]:$/.test(normalizedRoot)
+    ? normalizedRoot
+    : rootParts[rootParts.length - 1] || normalizedRoot;
+  const parts: { label: string; path: string }[] = [virtualRoot, { label: rootLabel, path: normalizedRoot }];
+  const relative = normalized.slice(normalizedRoot.length).replace(/^\\+/, "");
+  const descendants = relative.split("\\").filter(Boolean);
+  let cursor = normalizedRoot;
+  for (const descendant of descendants) {
+    cursor = cursor + (cursor.endsWith("\\") ? "" : "\\") + descendant;
+    parts.push({ label: descendant, path: cursor });
   }
   return parts;
 }
@@ -1212,27 +1266,31 @@ function MediaResult({ command }: { command: Command }) {
   return <div className="state-card"><strong>{String(result.status ?? command.type)}</strong><p>{String(result.stream ?? result.mode ?? result.error ?? "Request updated.")}</p><DeveloperDetails result={result} /></div>;
 }
 
-function PowerResult({ result }: { result: Record<string, unknown> }) {
-  const isStatus = result.action === "status";
-  if (isStatus) {
-    return (
-      <div className="state-card">
-        {Boolean(result.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/sleep can execute.</div>}
-        <div className="power-grid">
-          <PowerMetric tone="temp" label="CPU usage" value={formatNullable(result.cpu_percent, "%")} />
-          <PowerMetric tone="uptime" label="System uptime" value={formatDuration(Number(result.system_uptime_seconds ?? 0))} />
-          <PowerMetric tone="battery" label="Battery" value={formatBattery(result.battery_percent, result.battery_plugged)} />
-        </div>
-        <DeveloperDetails result={result} />
-      </div>
-    );
-  }
+function PowerResult({ command, telemetry }: { command?: Command; telemetry?: Record<string, unknown> | null }) {
+  const actionResult = command?.type !== "power.status" ? command?.result : undefined;
+  const statusResult = command?.type === "power.status" && command.result ? command.result : telemetry;
   return (
     <div className="state-card">
-      <strong>{String(result.action ?? "power")}</strong>
-      <span className={`status-pill ${result.status === "dry_run" ? "" : "succeeded"}`}>{String(result.status ?? "unknown")}</span>
-      <p>{String(result.message ?? "Request sent to the agent.")}</p>
-      <DeveloperDetails result={result} />
+      {statusResult ? (
+        <>
+          {Boolean(statusResult.dry_run_power) && <div className="danger-note">Dry-run mode active. Enable real power actions on the Agent before shutdown/restart/sleep can execute.</div>}
+          <div className="power-grid">
+            <PowerMetric tone="temp" label="CPU usage" value={formatNullable(statusResult.cpu_percent, "%")} />
+            <PowerMetric tone="uptime" label="System uptime" value={formatDuration(Number(statusResult.system_uptime_seconds ?? 0))} />
+            <PowerMetric tone="battery" label="Battery" value={formatBattery(statusResult.battery_percent, statusResult.battery_plugged)} />
+          </div>
+        </>
+      ) : (
+        <div className="inline-hint">Refresh Power Status to load CPU, uptime, and battery telemetry.</div>
+      )}
+      {command && command.type !== "power.status" && (
+        <div className={"power-command-state " + (command.error ? "danger-note" : "")}>
+          <strong>{command.type.replace("power.", "")}</strong>
+          <span className={"status-pill " + command.status}>{command.status}</span>
+          <p>{command.error ?? String(actionResult?.message ?? "Waiting for local approval or Agent result.")}</p>
+        </div>
+      )}
+      {statusResult && <DeveloperDetails result={statusResult} />}
     </div>
   );
 }
@@ -1375,17 +1433,45 @@ function updateModuleResultCache(current: Record<string, Command>, commands: Com
     if (moduleId && command.result) {
       next[moduleCacheKey(command.agent_id, moduleId)] = command;
     }
-    if ((command.type === "app.stop" || command.type === "process.kill") && command.result) {
-      const pid = String(command.result.pid ?? command.payload?.pid ?? "");
-      if (pid) {
+    if (command.type === "app.stop" && command.result) {
+      const appKey = String(command.result.app_key ?? command.payload?.app_key ?? "");
+      const processNames = Array.isArray(command.result.process_names) ? command.result.process_names.map((name) => String(name).toLowerCase()) : [];
+      if (appKey) {
         for (const targetModule of ["applications", "processes"]) {
           const key = moduleCacheKey(command.agent_id, targetModule);
-          if (next[key]) next[key] = removePidFromCachedCommand(next[key], pid);
+          if (next[key]) next[key] = removeAppFromCachedCommand(next[key], appKey, processNames);
         }
+      }
+    }
+    if (command.type === "process.kill" && command.result) {
+      const pid = String(command.result.pid ?? command.payload?.pid ?? "");
+      if (pid) {
+        const key = moduleCacheKey(command.agent_id, "processes");
+        if (next[key]) next[key] = removePidFromCachedCommand(next[key], pid);
       }
     }
   }
   return next;
+}
+
+function removeAppFromCachedCommand(command: Command, appKey: string, processNames: string[]): Command {
+  if (!command.result) return command;
+  const removeApp = (value: unknown) => asRecords(value).filter((item) => String(item.app_key) !== appKey);
+  const removeProcesses = (value: unknown) => asRecords(value).filter((item) => !processNames.includes(String(item.name ?? "").toLowerCase()));
+  return {
+    ...command,
+    result: {
+      ...command.result,
+      items: Array.isArray(command.result.items)
+        ? (Array.isArray(command.result.apps) ? removeProcesses(command.result.items) : removeApp(command.result.items))
+        : command.result.items,
+      apps: Array.isArray(command.result.apps) ? removeApp(command.result.apps) : command.result.apps,
+      count: Array.isArray(command.result.items)
+        ? (Array.isArray(command.result.apps) ? removeProcesses(command.result.items).length : removeApp(command.result.items).length)
+        : command.result.count,
+      app_count: Array.isArray(command.result.apps) ? removeApp(command.result.apps).length : command.result.app_count,
+    },
+  };
 }
 
 function removePidFromCachedCommand(command: Command, pid: string): Command {
@@ -1396,9 +1482,7 @@ function removePidFromCachedCommand(command: Command, pid: string): Command {
     result: {
       ...command.result,
       items: Array.isArray(command.result.items) ? removePid(command.result.items) : command.result.items,
-      apps: Array.isArray(command.result.apps) ? removePid(command.result.apps) : command.result.apps,
       count: Array.isArray(command.result.items) ? removePid(command.result.items).length : command.result.count,
-      app_count: Array.isArray(command.result.apps) ? removePid(command.result.apps).length : command.result.app_count,
     },
   };
 }
@@ -1508,8 +1592,8 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
       count: 47,
       app_count: 2,
       apps: [
-        { pid: 1034, name: "Chrome", title: "RemoteCtrl Dashboard" },
-        { pid: 2208, name: "Code", title: "D:\\Project\\MMT" },
+        { app_key: "chrome", name: "Chrome", window_count: 2, process_names: ["chrome.exe"] },
+        { app_key: "code", name: "Code", window_count: 1, process_names: ["Code.exe"] },
       ],
       items: [
         { pid: 1034, name: "chrome.exe", cpu: 2.4, memory_mb: 412, status: "running" },
@@ -1519,12 +1603,12 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
     };
   }
   if (commandType === "app.list") {
-    return { count: 2, items: [{ pid: 1034, name: "Chrome", title: "RemoteCtrl Dashboard" }, { pid: 2208, name: "VSCode", title: "D:\\Project\\MMT" }] };
+    return { count: 2, items: [{ app_key: "chrome", name: "Chrome", window_count: 2, process_names: ["chrome.exe"] }, { app_key: "code", name: "Code", window_count: 1, process_names: ["Code.exe"] }] };
   }
   if (commandType === "app.start") return { status: payload.mode === "new_instance" ? "started_new" : "focused_existing", preset: payload.preset, mode: payload.mode };
   if (commandType === "files.roots") return { count: 2, requires_selection: true, roots: [{ name: "Documents", path: "C:\\Users\\demo\\Documents", exists: true, is_dir: true }, { name: "Data", path: "D:\\Data", exists: true, is_dir: true }] };
   if (commandType === "files.list") {
-    return { path: String(payload.path ?? "D:\\Data"), entries: [{ name: "Reports", path: "D:\\Data\\Reports", is_dir: true, size: 0 }, { name: "report.docx", path: "D:\\Data\\report.docx", is_dir: false, size: 81234 }] };
+    return { path: String(payload.path ?? "D:\\Data"), allowed_root: String(payload.path ?? "D:\\Data"), entries: [{ name: "Reports", path: "D:\\Data\\Reports", is_dir: true, size: 0 }, { name: "report.docx", path: "D:\\Data\\report.docx", is_dir: false, size: 81234 }] };
   }
   if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
   if (commandType === "webcam.list") return { capture_backend: "webview2", available: true, opencv_available: false, cv2_available: false, agent_packaged: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };

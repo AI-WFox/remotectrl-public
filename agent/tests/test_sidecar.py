@@ -124,3 +124,29 @@ def test_remote_activity_stop_notifies_desktop_indicator(monkeypatch):
 
     assert app._provider("activity_stop") == "stopped"
     assert ("activity.stopped", {"status": "stopped"}) in bridge.events
+
+
+def test_local_screen_and_webcam_stop_publish_idle_session_state(monkeypatch):
+    for stream in ("screen", "webcam"):
+        bridge = FakeBridge()
+        app = AgentSidecar(bridge, AgentConfig(agent_id="agent-1", agent_token="saved-token"))
+        gateway_events: list[tuple[str, dict]] = []
+        if stream == "screen":
+            app.client.active_streams["screen"] = (None, None)
+        else:
+            app.client.webcam_stream = {"command_id": "webcam-live"}
+
+        def stop_stream_local(kind, local_capture_stopped=False):
+            assert kind == stream
+            assert local_capture_stopped is (stream == "webcam")
+            app.client.active_streams.pop("screen", None)
+            app.client.webcam_stream = None
+            return {"stream": kind, "status": "stopped"}
+
+        monkeypatch.setattr(app.client, "stop_stream_local", stop_stream_local)
+        monkeypatch.setattr(app.client, "publish_agent_event", lambda event_type, payload=None: gateway_events.append((event_type, payload or {})) or True)
+
+        state = app.dispatch("agent." + stream + "_stop_local", {"local_capture_stopped": stream == "webcam"})
+
+        assert state["sessions"][stream] is False
+        assert ("agent_session_state", {"sessions": {"screen": False, "webcam": False, "activity": False}, "source": "local"}) in gateway_events

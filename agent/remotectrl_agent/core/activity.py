@@ -183,6 +183,31 @@ class ActivityCapture:
         self.mouse_listener.daemon = True
         self.mouse_listener.start()
 
+    @staticmethod
+    def _raw_printable_key(key: Any, shift: bool = False) -> str | None:
+        """Translate the physical Windows key into text without using IME output."""
+        vk = getattr(key, "vk", None)
+        if isinstance(vk, int):
+            if 0x41 <= vk <= 0x5A:
+                value = chr(vk)
+                return value if shift else value.lower()
+            if 0x30 <= vk <= 0x39:
+                normal = "0123456789"
+                shifted = ")!@#$%^&*("
+                return shifted[vk - 0x30] if shift else normal[vk - 0x30]
+            punctuation = {
+                0xBA: (";", ":"), 0xBB: ("=", "+"), 0xBC: (",", "<"),
+                0xBD: ("-", "_"), 0xBE: (".", ">"), 0xBF: ("/", "?"),
+                0xC0: (chr(96), "~"), 0xDB: ("[", "{"), 0xDC: ("\\", "|"),
+                0xDD: ("]", "}"), 0xDE: ("'", '"'),
+            }
+            if vk in punctuation:
+                return punctuation[vk][1 if shift else 0]
+        char = getattr(key, "char", None)
+        if isinstance(char, str) and len(char) == 1 and 32 <= ord(char) < 127:
+            return char.upper() if shift and char.isalpha() else char
+        return None
+
     def _start_keyboard(self) -> None:
         try:
             from pynput import keyboard
@@ -196,34 +221,35 @@ class ActivityCapture:
             keyboard.Key.cmd: "Win", keyboard.Key.cmd_l: "Win", keyboard.Key.cmd_r: "Win",
         }
 
-        def label(key) -> str:
-            char = getattr(key, "char", None)
-            if char:
-                if len(char) == 1 and ord(char) < 32 and "Ctrl" in self._modifiers:
-                    return chr(ord(char) + 96).upper()
-                return char.upper() if "Shift" in self._modifiers and len(char) == 1 else char
+        def special_label(key) -> str:
             return str(getattr(key, "name", None) or str(key).replace("Key.", "")).replace("_", " ").title()
 
         def on_press(key) -> None:
             modifier = modifiers.get(key)
             if modifier:
-                self._flush_text("modifier")
+                if modifier != "Shift":
+                    self._flush_text("modifier")
                 self._modifiers.add(modifier)
                 return
-            value, window = label(key), self.active_window()
-            if self._modifiers:
+            window = self.active_window()
+            printable = self._raw_printable_key(key, shift="Shift" in self._modifiers)
+            shortcut_modifiers = self._modifiers.intersection({"Ctrl", "Alt", "Win"})
+            if shortcut_modifiers:
                 self._flush_text("shortcut")
+                value = printable or special_label(key)
                 combo = " + ".join(sorted(self._modifiers) + [value.upper() if len(value) == 1 else value])
                 self._record("keyboard.shortcut", {"keys": combo, "window": window})
-            elif len(value) == 1 and ord(value) >= 32:
-                self._append_text(value, window)
-            elif value == "Space":
-                self._append_text(" ", window)
-            elif value == "Backspace":
-                self._erase_text(window)
+            elif printable is not None:
+                self._append_text(printable, window)
             else:
-                self._flush_text(value.lower().replace(" ", "_"))
-                self._record("keyboard.key", {"key": value, "window": window})
+                value = special_label(key)
+                if value == "Space":
+                    self._append_text(" ", window)
+                elif value == "Backspace":
+                    self._erase_text(window)
+                else:
+                    self._flush_text(value.lower().replace(" ", "_"))
+                    self._record("keyboard.key", {"key": value, "window": window})
 
         def on_release(key) -> None:
             modifier = modifiers.get(key)

@@ -26,7 +26,7 @@ Prerequisites: Node 24, Rust stable MSVC, Python environment at `agent/.venv`.
 powershell -ExecutionPolicy Bypass -File scripts\package_agent_desktop.ps1
 ```
 
-The command first packages the Python core with PyInstaller, including Pillow, psutil and pynput. Webcam capture uses the Tauri WebView2 media API, so tester machines do not need a separate OpenCV installation. It then builds the Tauri NSIS installer and embeds a WebView2 bootstrapper.
+The command first packages the Python core with PyInstaller, including Pillow, psutil and pynput. Webcam capture uses the Tauri WebView2 media API, so tester machines do not need a separate OpenCV installation. It then builds the Tauri NSIS installer and embeds a WebView2 bootstrapper. Screen and Webcam live sessions open visible local indicator windows with local stop controls. Approval windows are undecorated and can only be resolved with Deny, Allow once, or Allow for this session. Webcam Local Stop releases the WebView2 MediaStream before notifying the sidecar, so local camera shutdown does not wait on a reentrant bridge request.
 
 ## Output
 

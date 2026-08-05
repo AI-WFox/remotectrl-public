@@ -21,7 +21,7 @@ The gateway is the only component that routes commands. Agents never accept inbo
 
 Remote handlers require local approval before doing work by default, including application/process listing, app start/stop, file browse/download, screen, webcam, Activity Capture, and power control. Stop commands also require approval so the local user remains informed of every remote session change.
 
-Agent users can approve a command once or allow the same command family for the current Agent session. Session approvals are runtime-only and reset on disconnect/restart/manual reset. Approval decisions, including cached session approvals, are reported to the backend and written to audit logs.
+Agent users can approve a command once or allow the same command and security-relevant resource scope for the current Agent session. For example, allowing app.start for Notepad does not allow Chrome. Session approvals are runtime-only and reset on disconnect/restart/manual reset. Approval decisions, including cached session approvals, are reported to the backend and written to audit logs.
 
 ## Data Model
 

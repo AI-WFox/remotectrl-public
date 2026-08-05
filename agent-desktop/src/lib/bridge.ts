@@ -81,7 +81,11 @@ export class AgentBridge {
       const waiter = this.pending.get(message.id)
       if (!waiter) return
       this.pending.delete(message.id)
-      message.ok ? waiter.resolve(message.result) : waiter.reject(new Error(message.error ?? "Agent core request failed"))
+      if (message.ok) {
+        waiter.resolve(message.result)
+      } else {
+        waiter.reject(new Error(message.error ?? "Agent core request failed"))
+      }
       return
     }
     this.publish(message)

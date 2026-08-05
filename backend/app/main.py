@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from contextlib import asynccontextmanager
 import asyncio
+import threading
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -62,6 +65,33 @@ COMMAND_CATALOG = [
 for item in COMMAND_CATALOG:
     item["requires_approval"] = command_requires_approval(item["type"])
 COMMAND_TYPES = {item["type"] for item in COMMAND_CATALOG}
+COMMAND_RATE_LIMIT = 12
+COMMAND_RATE_WINDOW_SECONDS = 1.0
+COMMAND_RATE_MAX_BUCKETS = 2048
+_command_submission_lock = threading.Lock()
+_command_attempts: dict[str, deque[float]] = {}
+_command_rate_last_cleanup = 0.0
+
+
+def _consume_command_budget(key: str) -> bool:
+    global _command_rate_last_cleanup
+    now = time.monotonic()
+    if now - _command_rate_last_cleanup >= COMMAND_RATE_WINDOW_SECONDS or len(_command_attempts) >= COMMAND_RATE_MAX_BUCKETS:
+        for bucket_key, bucket in list(_command_attempts.items()):
+            while bucket and now - bucket[0] >= COMMAND_RATE_WINDOW_SECONDS:
+                bucket.popleft()
+            if not bucket:
+                _command_attempts.pop(bucket_key, None)
+        _command_rate_last_cleanup = now
+    if key not in _command_attempts and len(_command_attempts) >= COMMAND_RATE_MAX_BUCKETS:
+        return False
+    attempts = _command_attempts.setdefault(key, deque())
+    while attempts and now - attempts[0] >= COMMAND_RATE_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= COMMAND_RATE_LIMIT:
+        return False
+    attempts.append(now)
+    return True
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -222,7 +252,25 @@ async def create_command(
     if body.type not in COMMAND_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported command type")
     try:
-        command = repo.create_command(body.agent_id, body.type, body.payload, user["email"])
+        with _command_submission_lock:
+            duplicate = repo.find_active_duplicate_command(body.agent_id, body.type, body.payload, user["email"])
+            if duplicate:
+                repo.audit(
+                    user["email"],
+                    "command.deduplicated",
+                    body.agent_id,
+                    duplicate["id"],
+                    {"type": body.type},
+                )
+                return duplicate
+            rate_key = f"{user['email']}:{body.agent_id}"
+            if not _consume_command_budget(rate_key):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many remote commands. Wait briefly before trying again.",
+                    headers={"Retry-After": "1"},
+                )
+            command = repo.create_command(body.agent_id, body.type, body.payload, user["email"])
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     sent = await manager.send_to_agent(
@@ -324,7 +372,10 @@ async def agent_ws(websocket: WebSocket) -> None:
         if disconnected_current_socket and repo.get_agent(agent["id"]):
             manager.clear_agent_sessions(agent["id"])
             repo.set_agent_status(agent["id"], "offline")
-            repo.audit("agent", "agent.disconnected", agent_id=agent["id"])
+            failed_commands = repo.fail_active_commands_for_agent(agent["id"])
+            repo.audit("agent", "agent.disconnected", agent_id=agent["id"], detail={"failed_commands": len(failed_commands)})
+            for command in failed_commands:
+                await manager.broadcast_dashboard({"type": "command.updated", "command": command})
             await manager.broadcast_dashboard({"type": "agent.offline", "agent_id": agent["id"]})
 
 

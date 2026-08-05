@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { emit, emitTo, listen } from "@tauri-apps/api/event"
 import { getAllWebviewWindows, getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow"
 import { open } from "@tauri-apps/plugin-dialog"
 import {
-  Activity, ChevronRight, FolderOpen, HardDrive, Info,
-  LaptopMinimal, LoaderCircle, Moon, PanelLeft, Power, RefreshCw, ShieldCheck,
+  Activity, Camera, ChevronRight, FolderOpen, HardDrive, Info,
+  LaptopMinimal, Monitor, Moon, PanelLeft, RefreshCw, ShieldCheck,
   Sun, Unplug, Wifi, XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -19,7 +19,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
@@ -92,6 +91,7 @@ function App() {
   const query = new URLSearchParams(window.location.search)
   if (query.get("view") === "approval") return <ApprovalWindow requestId={query.get("request") ?? ""} />
   if (query.get("view") === "activity") return <ActivityWindow />
+  if (query.get("view") === "session") return <SessionIndicatorWindow kind={query.get("kind") === "webcam" ? "webcam" : "screen"} />
   return <AgentConsole />
 }
 
@@ -110,6 +110,7 @@ function AgentConsole() {
     if (!next || typeof next !== "object") return
     const candidate = next as AgentState
     if (candidate.config && candidate.sessions) {
+      void syncSessionIndicatorWindows(candidate.sessions)
       setState(candidate)
       setGateway(candidate.config.server_url)
       setAgentName(candidate.config.agent_name)
@@ -130,6 +131,20 @@ function AgentConsole() {
     const unlistenPromise = listen<ApprovalPayload>("approval-response", ({ payload }) => localBridge.reply(payload.id, payload).catch(() => undefined))
     const approvalFinishedPromise = listen<{ label: string }>("approval-finished", ({ payload }) => releaseApprovalSlot(payload.label))
     const activityStopPromise = listen("activity-local-stop", () => localBridge.call("agent.activity_stop_local").then(applyState).catch((error: Error) => toast.error(error.message)))
+    const sessionStopPromise = listen<{ kind: "screen" | "webcam" }>("session-local-stop", ({ payload }) => {
+      const stopLocally = async () => {
+        const localCaptureStopped = payload.kind === "webcam"
+        if (localCaptureStopped) webcam.current?.stop()
+        try {
+          const nextState = await localBridge.call("agent." + payload.kind + "_stop_local", { local_capture_stopped: localCaptureStopped })
+          applyState(nextState)
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Local session stop failed")
+          void localBridge.call("agent.get_state").then(applyState).catch(() => undefined)
+        }
+      }
+      void stopLocally()
+    })
     const trayPromise = listen<string>("tray-command", ({ payload }) => {
       if (payload === "agent.pause_toggle") localBridge.call("agent.pause_toggle").then(applyState).catch((error: Error) => toast.error(error.message))
       if (payload === "agent.reset_approvals") localBridge.call("agent.reset_approvals").then(() => toast.success("Session approvals reset"))
@@ -146,6 +161,7 @@ function AgentConsole() {
       unlistenPromise.then((unlisten) => unlisten())
       approvalFinishedPromise.then((unlisten) => unlisten())
       activityStopPromise.then((unlisten) => unlisten())
+      sessionStopPromise.then((unlisten) => unlisten())
       trayPromise.then((unlisten) => unlisten())
       window.removeEventListener("focus", syncState)
       document.removeEventListener("visibilitychange", onVisibilityChange)
@@ -358,8 +374,16 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
   }
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]"
+  if (value && typeof value === "object") {
+    return "{" + Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => JSON.stringify(key) + ":" + stableStringify(item)).join(",") + "}"
+  }
+  return JSON.stringify(value)
+}
+
 async function openApprovalWindow(payload: ApprovalPayload) {
-  const key = `${payload.message.command_type ?? "action"}-${JSON.stringify(payload.message.payload ?? {})}`.replace(/[^a-z0-9]+/gi, "-").slice(0, 70)
+  const key = String(payload.message.command_type ?? "action") + "-" + stableStringify(payload.message.payload ?? {})
   const existingLabel = approvalSlotsByKey.get(key)
   if (existingLabel) {
     localStorage.setItem(`approval:${existingLabel}`, JSON.stringify(payload))
@@ -388,7 +412,9 @@ async function openApprovalWindow(payload: ApprovalPayload) {
     minWidth: 520,
     minHeight: 380,
     alwaysOnTop: true,
-    resizable: true,
+    resizable: false,
+    closable: false,
+    decorations: false,
     center: true,
   })
   await new Promise<void>((resolve, reject) => {
@@ -415,6 +441,37 @@ async function closeActivityWindow() {
   if (existing) await existing.close()
 }
 
+async function setSessionIndicator(kind: "screen" | "webcam", active: boolean) {
+  const label = kind + "-indicator"
+  const existing = await WebviewWindow.getByLabel(label)
+  if (!active) {
+    if (existing) await existing.close()
+    return
+  }
+  if (existing) {
+    await existing.show()
+    return
+  }
+  new WebviewWindow(label, {
+    url: "/?view=session&kind=" + kind,
+    title: kind === "screen" ? "RemoteCtrl Screen Sharing" : "RemoteCtrl Webcam Sharing",
+    width: 460,
+    height: 250,
+    minWidth: 420,
+    minHeight: 230,
+    alwaysOnTop: true,
+    resizable: false,
+    closable: false,
+  })
+}
+
+async function syncSessionIndicatorWindows(sessions: AgentState["sessions"]) {
+  await Promise.all([
+    setSessionIndicator("screen", Boolean(sessions.screen)),
+    setSessionIndicator("webcam", Boolean(sessions.webcam)),
+  ])
+}
+
 function ApprovalWindow({ requestId }: { requestId: string }) {
   const [payload, setPayload] = useState<ApprovalPayload | null>(() => { const raw = localStorage.getItem(`approval:${requestId}`); return raw ? JSON.parse(raw) as ApprovalPayload : null })
   const resolved = useRef(false)
@@ -426,13 +483,8 @@ function ApprovalWindow({ requestId }: { requestId: string }) {
   useEffect(() => {
     let unlisten: (() => void) | undefined
     const window = getCurrentWebviewWindow()
-    window.onCloseRequested(async (event) => {
-      if (resolved.current) return
+    window.onCloseRequested((event) => {
       event.preventDefault()
-      resolved.current = true
-      if (payload) await emit("approval-response", { id: payload.id, approved: false, approval_mode: "prompt_once", policy_scope: "single_command" })
-      await emit("approval-finished", { label: requestId })
-      await window.close()
     }).then((dispose) => { unlisten = dispose })
     return () => unlisten?.()
   }, [payload, requestId])
@@ -445,6 +497,23 @@ function ApprovalWindow({ requestId }: { requestId: string }) {
     await getCurrentWebviewWindow().hide()
   }
   return <TooltipProvider><div className="min-h-screen bg-background p-5"><Card className="border-amber-500/30 shadow-none"><CardContent className="space-y-5 p-5"><div className="flex items-start gap-3"><div className="grid size-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600"><ShieldCheck className="size-5" /></div><div><p className="text-xs font-semibold tracking-wide text-amber-700 dark:text-amber-300">LOCAL CONSENT REQUIRED</p><h1 className="mt-1 text-xl font-semibold">Allow remote action?</h1></div></div><div className="rounded-lg border border-border bg-muted/35 p-3"><p className="font-mono text-sm font-semibold">{message?.command_type ?? "Remote action"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{Object.entries(message?.payload ?? {}).map(([key, value]) => `${key}: ${String(value)}`).join(" · ") || "No additional parameters"}</p></div><p className="text-sm text-muted-foreground">Your decision is sent to the gateway and recorded in the audit trail.</p><div className="flex flex-wrap justify-end gap-2"><Button variant="destructive" onClick={() => decide(false, "single_command")}><XCircle />Deny</Button><Button variant="outline" onClick={() => decide(true, "single_command")}>Allow once</Button><Button onClick={() => decide(true, "current_session")}>Allow for this session</Button></div></CardContent></Card></div></TooltipProvider>
+}
+
+function SessionIndicatorWindow({ kind }: { kind: "screen" | "webcam" }) {
+  const [stopping, setStopping] = useState(false)
+  const Icon = kind === "screen" ? Monitor : Camera
+  const label = kind === "screen" ? "Screen sharing" : "Webcam sharing"
+  const stop = async () => {
+    if (stopping) return
+    setStopping(true)
+    try {
+      await emitTo("main", "session-local-stop", { kind })
+      await getCurrentWebviewWindow().close()
+    } catch {
+      setStopping(false)
+    }
+  }
+  return <TooltipProvider><div className="min-h-screen bg-background p-4"><Card className="h-full border-emerald-500/30 shadow-none"><CardContent className="flex h-full flex-col gap-3 p-5"><div className="flex items-start gap-3"><div className="grid size-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600"><Icon className="size-5" /></div><div><p className="text-xs font-semibold tracking-wide text-emerald-700 dark:text-emerald-300">VISIBLE SESSION</p><h1 className="mt-1 text-lg font-semibold">{label} is active</h1></div></div><p className="text-sm leading-5 text-muted-foreground">This indicator stays visible while the remote session is active. You can stop access locally at any time.</p><div className="mt-auto"><Button variant="destructive" disabled={stopping} onClick={stop}><Unplug />{stopping ? "Stopping..." : "Stop local " + kind}</Button></div></CardContent></Card></div></TooltipProvider>
 }
 
 function ActivityWindow() {

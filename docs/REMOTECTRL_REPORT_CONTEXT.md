@@ -140,9 +140,9 @@ Dashboard tạo token ngẫu nhiên. Repository chỉ lưu SHA-256 hash; raw tok
 
 - `app.list`: enumerate visible Windows của người dùng, loại cửa sổ Agent.
 - `app.start`: preset allowlist như Notepad, Calculator, Paint, Explorer, Chrome/Brave; hỗ trợ `focus_existing` hoặc `new_instance`.
-- `app.stop`: route dùng guarded process termination theo PID.
+- app.stop receives a logical app_key, closes every visible window for that application, then guarded-terminates remaining processes; Explorer and shared Windows hosts are never terminated.
 
-Kết quả app có PID, process name, window title và handle nếu Windows API lấy được. `focus_existing` tìm cửa sổ phù hợp trước khi mở mới.
+Kết quả Applications được gom theo logical app, mỗi app có app_key, display name và số visible windows; UI không hiển thị PID hoặc tab title. Raw windows chỉ được Agent dùng nội bộ cho focus-existing và Close all.
 
 ### Processes
 
@@ -284,11 +284,11 @@ Các command protected được liệt kê trong `APPROVAL_REQUIRED_COMMANDS`, g
 Agent user có thể:
 
 - **Allow once:** chỉ command hiện tại.
-- **Allow for this session:** cache theo đúng command type đến khi disconnect/restart/manual reset.
+- **Allow for this session:** cache theo command type và resource đã duyệt đến khi disconnect/restart/manual reset.
 - **Deny:** command không chạy và trả denied.
-- Đóng approval bằng X được xử lý như deny trong desktop flow.
+- Approval window không cho đóng bằng X/Alt+F4; người dùng phải chọn Deny, Allow once hoặc Allow for this session.
 
-Session cache không được phép dùng approval của webcam start cho webcam stop hoặc dùng chéo action khác; `AgentClient._approval_family` hiện dùng command type làm key.
+Session cache không được dùng chéo action hoặc resource. Approval scope gồm command type và resource quan trọng như app preset/mode, app key, PID, file path hoặc camera device.
 
 ### Các lớp bảo vệ
 

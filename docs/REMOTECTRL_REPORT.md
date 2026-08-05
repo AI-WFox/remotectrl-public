@@ -131,7 +131,7 @@ Phần này ghi rõ các yêu cầu mà RemoteCtrl dùng để định hướng 
 4. Command gửi tới Agent A không xuất hiện hoặc thực thi trên Agent B.
 5. Request nhạy cảm hiển thị approval trên Agent; Deny không chạy action.
 6. Allow once hỏi lại ở command sau; session approval không áp dụng chéo command type.
-7. Process/app list hiển thị dữ liệu Agent thật và stop đúng PID.
+7. Process/app list hiển thị dữ liệu Agent thật; Applications gom theo logical app và Close all đóng toàn bộ cửa sổ cùng ứng dụng.
 8. Screen screenshot/live nhận frame; Stop Live chuyển về idle và xóa preview.
 9. Webcam báo rõ camera/permission failure hoặc stream được frame nếu camera khả dụng.
 10. Files chỉ browse allowed folder và download được file trong whitelist.
@@ -246,7 +246,7 @@ Các request khác nhau có thể mở song song. Request trùng được dedupl
 - `app.start`: chạy preset allowlist.
 - `focus_existing`: focus cửa sổ đang tồn tại.
 - `new_instance`: mở instance mới.
-- `app.stop`: dừng theo PID.
+- app.stop receives a logical app_key, closes every visible window for that application, then guarded-terminates remaining processes; Explorer and shared Windows hosts are never terminated.
 - Cửa sổ của RemoteCtrl Agent được loại khỏi danh sách app hiển thị.
 
 ### Processes
@@ -413,7 +413,7 @@ Gateway dùng `agent_id` để định tuyến và kiểm tra `command_id` thu�
 - **Allow once:** chỉ cấp quyền cho command hiện tại.
 - **Allow for this session:** cấp quyền tạm thời cho cùng command type trong phiên hiện tại.
 - **Deny:** command không thực thi và chuyển thành denied.
-- Đóng approval window bằng X được xử lý như deny.
+- Nút X/Alt+F4 của approval window bị vô hiệu hóa; người dùng phải chọn rõ `Deny`, `Allow once` hoặc `Allow for this session`.
 - Session approval reset khi disconnect, restart hoặc local reset.
 
 ### Giới hạn bảo mật của bản demo
@@ -720,7 +720,7 @@ sequenceDiagram
 
 | Command family | Commands | Cần approval | Guardrail |
 |---|---|---:|---|
-| Applications | `app.list`, `app.start`, `app.stop` | Có | Preset/path allowlist, PID guard |
+| Applications | app.list, app.start, app.stop | Có | Preset/path allowlist, logical app identity, Close all guard |
 | Processes | `process.list`, `process.kill` | Có | Protected process list |
 | Screen | `screen.screenshot`, `screen.live.start`, `screen.live.stop` | Có | Still capture hide approval windows only |
 | Files | `files.roots`, `files.list`, `files.download` | Có | Allowed root, traversal block, 10 MB limit |
@@ -731,7 +731,7 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> PendingApproval: Gateway sends sensitive command
-    PendingApproval --> Denied: Deny or approval window closed
+    PendingApproval --> Denied: Deny
     PendingApproval --> Running: Allow once
     PendingApproval --> Running: Allow for this session
     Running --> Succeeded: handler result ok
@@ -741,7 +741,7 @@ stateDiagram-v2
     Failed --> [*]
 ```
 
-`Allow once` chỉ cho command hiện tại. `Allow for this session` cache chính command type, nên `webcam.live.start` không tự grant `webcam.live.stop`. Cache bị xóa khi disconnect/restart/local reset. Request khác nhau có thể mở dialog song song; duplicate request được refresh thay vì chồng cửa sổ.
+`Allow once` chỉ cho command hiện tại. `Allow for this session` cache theo command type và resource đã duyệt (ví dụ app preset/path/mode, file path hoặc camera); vì vậy quyền mở Notepad không áp dụng cho Paint và `webcam.live.start` không tự grant `webcam.live.stop`. Cache bị xóa khi disconnect/restart/local reset. Request khác nhau có thể mở dialog song song; duplicate request được refresh thay vì chồng cửa sổ.
 
 **Căn cứ:** `backend/app/services/repository.py`, `agent/remotectrl_agent/core/client.py`, `agent-desktop/src/App.tsx`, `agent/tests/test_actions_and_streams.py`.
 
@@ -751,9 +751,9 @@ stateDiagram-v2
 
 **Mục đích:** cho operator xem visible application/window và yêu cầu focus, mở hoặc dừng app sau local approval.
 
-**Implementation:** `app.list` dùng Windows `EnumWindows`, lấy title, handle, PID và process name; nếu lỗi có PowerShell `Get-Process` fallback. RemoteCtrl Agent, approval và activity windows bị filter. `app.start` chỉ chấp nhận preset/path allowlist. `focus_existing` tìm app/window cùng process/title trước; nếu không có thì mở instance mới với `fallback_started`. `new_instance` yêu cầu mở process mới. `app.stop` dùng guarded PID termination.
+**Implementation:** `app.list` dùng Windows `EnumWindows`, sau đó nhóm các cửa sổ theo logical `app_key`; PID, title và handle chỉ được dùng nội bộ. Nếu lỗi có PowerShell `Get-Process` fallback. RemoteCtrl Agent, approval và activity windows bị filter. `app.start` chỉ chấp nhận preset/path allowlist. `focus_existing` tìm app/window cùng process/title trước; nếu không có thì mở instance mới với `fallback_started`. `new_instance` yêu cầu mở process mới. `app.stop` nhận `app_key`, gửi `WM_CLOSE` tới toàn bộ cửa sổ cùng ứng dụng và guarded-terminate các process cùng tên còn sót.
 
-**Input/Output:** input start gồm `preset`, optional `path`, `mode`; list output có `items` gồm PID, name, title, hwnd. UI render result thành rows, command cache loại PID sau stop.
+**Input/Output:** input start gồm preset, optional path và mode; list output gồm app_key, display name, window_count và process names nội bộ. Stop input dùng app_key; Web loại app/process tương ứng khỏi cache sau Close all.
 
 **Complexity:** list visible windows `O(w)` time/space, với `w` là số top-level window.
 

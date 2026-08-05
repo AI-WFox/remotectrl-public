@@ -58,6 +58,53 @@ def test_protected_process_kill_is_blocked(monkeypatch):
         handlers.process_kill({"pid": 44})
 
 
+def test_process_kill_returns_already_stopped_when_pid_disappeared(monkeypatch):
+    class NoSuchProcess(Exception):
+        pass
+
+    class MissingProcess:
+        def __init__(self, _pid):
+            raise NoSuchProcess()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(Process=MissingProcess, NoSuchProcess=NoSuchProcess, AccessDenied=PermissionError, TimeoutExpired=TimeoutError),
+    )
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+
+    result = handlers.process_kill({"pid": 44})
+
+    assert result == {"pid": 44, "name": "unknown", "status": "already_stopped"}
+
+
+def test_process_kill_fails_when_process_does_not_exit(monkeypatch):
+    class TimeoutExpired(Exception):
+        pass
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def name(self):
+            return "demo.exe"
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout):
+            raise TimeoutExpired(timeout)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(Process=FakeProcess, NoSuchProcess=LookupError, AccessDenied=PermissionError, TimeoutExpired=TimeoutExpired),
+    )
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+
+    with pytest.raises(RuntimeError, match="did not stop within 2 seconds"):
+        handlers.process_kill({"pid": 44})
+
 def test_power_defaults_to_dry_run():
     handlers = CommandHandlers(AgentConfig(dry_run_power=True), lambda action: "")
 
@@ -191,7 +238,7 @@ def test_app_start_focuses_existing_window_without_launch(monkeypatch, tmp_path:
     monkeypatch.setitem(handlers_module.APP_PRESETS, "notepad", [str(fake_exe)])
     monkeypatch.setattr(handlers_module.subprocess, "Popen", lambda args, close_fds=True: launched.append(args))
     handlers = CommandHandlers(AgentConfig(), lambda action: "")
-    monkeypatch.setattr(handlers, "app_list", lambda payload: {"items": [{"pid": 10, "name": "notepad", "title": "Untitled", "hwnd": 123}], "count": 1})
+    monkeypatch.setattr(handlers, "_visible_windows", lambda: [{"pid": 10, "name": "notepad.exe", "title": "Untitled - Notepad", "hwnd": 123}])
     monkeypatch.setattr(handlers, "_focus_window", lambda hwnd: True)
 
     result = handlers.app_start({"preset": "notepad", "mode": "focus_existing"})
@@ -199,6 +246,28 @@ def test_app_start_focuses_existing_window_without_launch(monkeypatch, tmp_path:
     assert result["status"] == "focused_existing"
     assert launched == []
 
+
+def test_app_start_does_not_confuse_untitled_paint_with_notepad(monkeypatch, tmp_path: Path):
+    fake_exe = tmp_path / "notepad.exe"
+    fake_exe.write_text("", encoding="utf-8")
+    launched = []
+
+    import remotectrl_agent.core.handlers as handlers_module
+
+    monkeypatch.setitem(handlers_module.APP_PRESETS, "notepad", [str(fake_exe)])
+    monkeypatch.setattr(handlers_module.subprocess, "Popen", lambda args, close_fds=True: launched.append(args))
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    monkeypatch.setattr(
+        handlers,
+        "_visible_windows",
+        lambda: [{"pid": 10, "name": "mspaint.exe", "title": "Untitled - Paint", "hwnd": 123}],
+    )
+    monkeypatch.setattr(handlers, "_focus_window", lambda _hwnd: pytest.fail("Paint must not be focused for Notepad"))
+
+    result = handlers.app_start({"preset": "notepad", "mode": "focus_existing"})
+
+    assert result["status"] == "fallback_started"
+    assert launched == [[str(fake_exe)]]
 
 def test_app_start_focuses_uwp_hosted_window_by_title(monkeypatch, tmp_path: Path):
     fake_exe = tmp_path / "calc.exe"
@@ -212,11 +281,8 @@ def test_app_start_focuses_uwp_hosted_window_by_title(monkeypatch, tmp_path: Pat
     handlers = CommandHandlers(AgentConfig(), lambda action: "")
     monkeypatch.setattr(
         handlers,
-        "app_list",
-        lambda payload: {
-            "items": [{"pid": 10, "name": "ApplicationFrameHost.exe", "title": "Calculator", "hwnd": 123}],
-            "count": 1,
-        },
+        "_visible_windows",
+        lambda: [{"pid": 10, "name": "ApplicationFrameHost.exe", "title": "Calculator", "hwnd": 123}],
     )
     monkeypatch.setattr(handlers, "_focus_window", lambda hwnd: True)
 
@@ -233,12 +299,12 @@ def test_process_list_includes_visible_apps(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(process_iter=lambda attrs: [FakeProc()]))
     handlers = CommandHandlers(AgentConfig(), lambda action: "")
-    monkeypatch.setattr(handlers, "app_list", lambda payload: {"items": [{"pid": 22, "name": "Code", "title": "RemoteCtrl"}], "count": 1})
+    monkeypatch.setattr(handlers, "app_list", lambda payload: {"items": [{"app_key": "code", "name": "Code", "window_count": 1, "process_names": ["Code.exe"]}], "count": 1})
 
     result = handlers.process_list({})
 
     assert result["app_count"] == 1
-    assert result["apps"][0]["title"] == "RemoteCtrl"
+    assert result["apps"][0]["app_key"] == "code"
     assert result["items"][0]["name"] == "python.exe"
 
 
@@ -387,6 +453,25 @@ def test_webview2_webcam_forwards_frames_without_opencv():
     assert ws.messages[1]["frame"] == "ZmFrZS1mcmFtZQ=="
     assert ws.messages[-1]["ok"] is True
 
+def test_local_webcam_stop_skips_reentrant_camera_request():
+    calls = []
+
+    def camera_provider(action, payload):
+        calls.append((action, payload))
+        return {"capture_backend": "webview2", "status": "running"}
+
+    client = AgentClient(AgentConfig(), SimpleNamespace(), lambda _status: None, lambda _message: False, camera_provider)
+    ws = FakeWs()
+    client._start_tauri_webcam(ws, "start-command", "agent-1", {"fps": 12})
+
+    stopped = client.stop_stream_local("webcam", local_capture_stopped=True)
+
+    assert stopped == {"stream": "webcam", "status": "stopped"}
+    assert client.webcam_stream is None
+    assert [action for action, _payload in calls] == ["start"]
+    assert ws.messages[-2]["status"] == "stopped"
+    assert ws.messages[-1]["ok"] is True
+
 def test_capture_still_hides_only_pending_approval_windows():
     class FakeHandlers:
         def __init__(self):
@@ -416,3 +501,145 @@ def test_capture_still_hides_only_pending_approval_windows():
     assert handlers.payloads == [("screen.screenshot", {"quality": 85, "_hide_approval_windows": True})]
     assert ws.messages[-1]["type"] == "command_result"
     assert ws.messages[-1]["ok"] is True
+
+def test_session_approval_is_scoped_to_application_resource():
+    class FakeHandlers:
+        def handle(self, command_type, payload):
+            return {"status": "ok"}
+
+    prompts = []
+
+    def approve(command):
+        prompts.append(command)
+        return {"approved": True, "approval_mode": "prompt_once", "policy_scope": "current_session"}
+
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, approve)
+    notepad = {"command_type": "app.start", "payload": {"preset": "notepad", "mode": "focus_existing"}}
+    chrome = {"command_type": "app.start", "payload": {"preset": "chrome", "mode": "focus_existing"}}
+
+    assert client._approval_decision(notepad)["approval_mode"] == "prompt_once"
+    assert client._approval_decision(chrome)["approval_mode"] == "prompt_once"
+    assert client._approval_decision(notepad)["approval_mode"] == "session_cached"
+    assert len(prompts) == 2
+
+
+def test_session_approval_is_scoped_to_file_path():
+    class FakeHandlers:
+        def handle(self, command_type, payload):
+            return {"status": "ok"}
+
+    prompts = []
+
+    def approve(command):
+        prompts.append(command)
+        return {"approved": True, "approval_mode": "prompt_once", "policy_scope": "current_session"}
+
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, approve)
+    first = {"command_type": "files.list", "payload": {"path": "C:\\Allowed\\One"}}
+    second = {"command_type": "files.list", "payload": {"path": "D:\\Allowed\\Two"}}
+
+    client._approval_decision(first)
+    client._approval_decision(second)
+    assert client._approval_decision(first)["approval_mode"] == "session_cached"
+    assert len(prompts) == 2
+
+
+def test_app_list_groups_visible_windows_by_logical_application(monkeypatch):
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    monkeypatch.setattr(
+        handlers,
+        "_visible_windows",
+        lambda: [
+            {"pid": 10, "name": "chrome.exe", "title": "First tab", "hwnd": 101},
+            {"pid": 20, "name": "chrome.exe", "title": "Second tab", "hwnd": 102},
+            {"pid": 30, "name": "notepad.exe", "title": "Notes", "hwnd": 103},
+        ],
+    )
+
+    result = handlers.app_list({})
+
+    assert result["count"] == 2
+    assert result["window_count"] == 3
+    chrome = next(item for item in result["items"] if item["app_key"] == "chrome")
+    assert chrome["name"] == "Chrome"
+    assert chrome["window_count"] == 2
+    assert "pid" not in chrome
+    assert "title" not in chrome
+
+def test_app_stop_closes_every_visible_window_for_logical_app(monkeypatch):
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    snapshots = iter([
+        [
+            {"pid": 10, "name": "chrome.exe", "title": "First tab", "hwnd": 101},
+            {"pid": 20, "name": "chrome.exe", "title": "Second tab", "hwnd": 102},
+            {"pid": 30, "name": "notepad.exe", "title": "Notes", "hwnd": 103},
+        ],
+        [],
+    ])
+    monkeypatch.setattr(handlers, "_visible_windows", lambda: next(snapshots))
+    import remotectrl_agent.core.handlers as handlers_module
+    monkeypatch.setattr(handlers_module.time, "sleep", lambda _seconds: None)
+
+    result = handlers.app_stop({"app_key": "chrome"})
+
+    assert result["app_key"] == "chrome"
+    assert result["status"] == "stopped"
+    assert result["process_names"] == ["chrome.exe"]
+    assert result["remaining_windows_before_terminate"] == 0
+
+def test_app_stop_terminate_fallback_returns_json_serializable_result(monkeypatch):
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    windows = [{"pid": 10, "name": "chrome.exe", "title": "Chrome", "hwnd": 0}]
+    monkeypatch.setattr(handlers, "_visible_windows", lambda: windows)
+    remaining = iter([windows, []])
+    monkeypatch.setattr(handlers, "_wait_for_app_windows_to_close", lambda _key, timeout: next(remaining))
+
+    terminated = []
+    process = SimpleNamespace(info={"pid": 10, "name": "chrome.exe"}, terminate=lambda: terminated.append(10))
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(process_iter=lambda _attrs: [process]))
+
+    result = handlers.app_stop({"app_key": "chrome"})
+
+    assert terminated == [10]
+    assert result["status"] == "stopped"
+    assert result["remaining_windows"] == 0
+    assert result["process_names"] == ["chrome.exe"]
+    assert json.loads(json.dumps(result))["terminated_processes"] == 1
+
+
+def test_app_stop_fails_when_visible_windows_remain(monkeypatch):
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+    windows = [{"pid": 10, "name": "chrome.exe", "title": "Chrome", "hwnd": 0}]
+    monkeypatch.setattr(handlers, "_visible_windows", lambda: windows)
+    monkeypatch.setattr(handlers, "_wait_for_app_windows_to_close", lambda _key, timeout: windows)
+    process = SimpleNamespace(info={"pid": 10, "name": "chrome.exe"}, terminate=lambda: None)
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(process_iter=lambda _attrs: [process]))
+
+    with pytest.raises(RuntimeError, match="still has 1 visible window"):
+        handlers.app_stop({"app_key": "chrome"})
+
+
+def test_process_kill_waits_for_process_exit(monkeypatch):
+    waited = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def name(self):
+            return "demo.exe"
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout):
+            waited.append(timeout)
+            return 0
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=FakeProcess, TimeoutExpired=TimeoutError))
+    handlers = CommandHandlers(AgentConfig(), lambda action: "")
+
+    result = handlers.process_kill({"pid": 44})
+
+    assert result["status"] == "stopped"
+    assert waited == [2]

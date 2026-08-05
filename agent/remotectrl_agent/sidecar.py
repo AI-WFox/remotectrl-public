@@ -267,6 +267,12 @@ class AgentSidecar:
             self.client.fail_webcam_stream(str(params.get("error") or "Local camera capture failed"))
             return {"ok": True}
 
+        if method in {"agent.screen_stop_local", "agent.webcam_stop_local"}:
+            stream = "screen" if method == "agent.screen_stop_local" else "webcam"
+            result = self.client.stop_stream_local(stream, local_capture_stopped=bool(params.get("local_capture_stopped")))
+            self._emit_session_state(force=True, source="local")
+            self._log(f"{stream.title()} sharing stopped locally")
+            return {**self.state(), "local_stop": result}
         if method == "agent.activity_stop_local":
             status = self.activity.stop()
             self.client.activity_active = False
