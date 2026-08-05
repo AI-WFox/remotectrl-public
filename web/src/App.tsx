@@ -418,7 +418,14 @@ export function App() {
   }
 
   async function runCommand(commandType: string, payload: Record<string, unknown> = defaultPayload(commandType)) {
-    if (!selectedAgent || !token) return;
+    if (!selectedAgent) {
+      setNotice("Select an Agent before running a command.");
+      return;
+    }
+    if (!token) {
+      setNotice("Your dashboard session is unavailable. Sign in again.");
+      return;
+    }
     const startedStream = commandType === "screen.live.start" ? "screen" : commandType === "webcam.live.start" ? "webcam" : null;
     const startedStreamKey = startedStream && selectedAgent ? streamStateKey(selectedAgent.id, startedStream) : null;
     const startedStreamStats = startedStreamKey ? streamStats[startedStreamKey] ?? emptyStreamStats : emptyStreamStats;
@@ -476,6 +483,7 @@ export function App() {
     commandRequestsInFlight.current.add(requestKey);
     recentCommandRequests.current.set(requestKey, Date.now());
     try {
+      setNotice(commandType + " is being sent to " + selectedAgent.name + "...");
       const command = await createCommand(token, selectedAgent.id, commandType, payload);
       setCommands((items) => [command, ...items.filter((item) => item.id !== command.id)]);
       setNotice(commandType + " sent to " + selectedAgent.name + ".");
@@ -893,7 +901,7 @@ function ModuleSurface({
             </div>
           )}
           {module.id === "activity" && <LiveActivityFeed events={activityEvents} />}
-          <ResultView moduleId={module.id} command={latestCommand} powerStatusCommand={powerStatusCommand} runCommand={runCommand} />
+          <ResultView moduleId={module.id} command={latestCommand} powerStatusCommand={powerStatusCommand} runCommand={runCommand} commandDisabled={commandDisabled} />
         </div>
       </div>
     </>
@@ -990,7 +998,7 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   return <button className="primary" onClick={() => runCommand("process.list")} disabled={commandDisabled}>Run</button>;
 }
 
-function ResultView({ moduleId, command, powerStatusCommand, runCommand }: { moduleId: string; command?: Command; powerStatusCommand?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+function ResultView({ moduleId, command, powerStatusCommand, runCommand, commandDisabled }: { moduleId: string; command?: Command; powerStatusCommand?: Command; runCommand: (type: string, payload?: Record<string, unknown>) => void; commandDisabled: boolean }) {
   if (moduleId === "power") {
     return <PowerResult command={command} telemetry={powerStatusCommand?.result} />;
   }
@@ -1016,7 +1024,7 @@ function ResultView({ moduleId, command, powerStatusCommand, runCommand }: { mod
   if (moduleId === "applications") return <ApplicationsResult result={command.result} runCommand={runCommand} />;
   if (moduleId === "processes") return <ProcessesResult result={command.result} runCommand={runCommand} />;
   if (command.type === "files.download") return <DownloadResult result={command.result} />;
-  if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} />;
+  if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} commandDisabled={commandDisabled} />;
   if (moduleId === "screen" || moduleId === "webcam") return <MediaResult command={command} />;
   if (moduleId === "activity" && command.type === "activity.export") return <div className="state-card"><strong>Activity export downloaded</strong><p>The current session log was saved to the browser download folder.</p></div>;
   if (moduleId === "activity") return <ActivityResult result={command.result} />;
@@ -1104,7 +1112,7 @@ function ProcessesResult({ result, runCommand }: { result: Record<string, unknow
   );
 }
 
-function FilesResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
+function FilesResult({ result, runCommand, commandDisabled }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void; commandDisabled: boolean }) {
   const roots = asRecords(result.roots);
   const entries = asRecords(result.entries).slice(0, 80);
   if (!roots.length && !entries.length && !result.path && result.requires_selection) {
@@ -1121,13 +1129,14 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
       <div className="result-list">
         <div className="result-list-heading"><strong>Choose an allowed folder</strong><span>{roots.length} roots</span></div>
         <div className="inline-hint">Only folders added on the Agent app appear here.</div>
+        {commandDisabled && <div className="inline-hint">The selected Agent is offline. Reconnect it before opening a folder.</div>}
         {roots.map((root) => (
           <div className="result-row" key={String(root.path)}>
             <div className="row-main">
               <strong className="entry-name"><Folder size={17} /> {String(root.name || root.path)}</strong>
               <div className="row-meta"><span>{root.exists ? "Available" : "Missing"}</span><span>Locally approved root</span></div>
             </div>
-            <button className="row-action" disabled={!root.exists || !root.is_dir} onClick={() => runCommand("files.list", { path: root.path })}>Open</button>
+            <button type="button" className="row-action" disabled={commandDisabled || !root.exists || !root.is_dir} onClick={() => runCommand("files.list", { path: root.path })}>Open</button>
           </div>
         ))}
         <DeveloperDetails result={result} />
@@ -1149,9 +1158,9 @@ function FilesResult({ result, runCommand }: { result: Record<string, unknown>; 
             </div>
           </div>
           {entry.is_dir ? (
-            <button className="row-action" onClick={() => runCommand("files.list", { path: entry.path })}>Open</button>
+            <button type="button" className="row-action" disabled={commandDisabled} onClick={() => runCommand("files.list", { path: entry.path })}>Open</button>
           ) : (
-            <button className="row-action" onClick={() => runCommand("files.download", { path: entry.path })}>Download</button>
+            <button type="button" className="row-action" disabled={commandDisabled} onClick={() => runCommand("files.download", { path: entry.path })}>Download</button>
           )}
         </div>
       ))}

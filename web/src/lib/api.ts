@@ -41,13 +41,25 @@ export async function apiGet<T>(path: string, token: string): Promise<T> {
 }
 
 export async function createCommand(token: string, agentId: string, type: string, payload: Record<string, unknown> = {}): Promise<Command> {
-  const response = await fetch(`${API_BASE}/api/commands`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ agent_id: agentId, type, payload }),
-  });
-  if (!response.ok) throw await readError(response, "Command failed");
-  return response.json();
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(`${API_BASE}/api/commands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ agent_id: agentId, type, payload }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw await readError(response, "Command failed");
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError("The Gateway did not respond within 15 seconds. Check the Agent connection and try again.", 0);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export const API_BASE_URL = API_BASE;
