@@ -1021,7 +1021,8 @@ function ResultView({ moduleId, command, powerStatusCommand, runCommand, command
       </div>
     );
   }
-  if (moduleId === "applications") return <ApplicationsResult result={command.result} runCommand={runCommand} />;
+  if (moduleId === "applications" && command.type === "app.list") return <ApplicationsResult result={command.result} runCommand={runCommand} />;
+  if (moduleId === "applications") return <ApplicationActionResult command={command} />;
   if (moduleId === "processes") return <ProcessesResult result={command.result} runCommand={runCommand} />;
   if (command.type === "files.download") return <DownloadResult result={command.result} />;
   if (moduleId === "files") return <FilesResult result={command.result} runCommand={runCommand} commandDisabled={commandDisabled} />;
@@ -1031,6 +1032,27 @@ function ResultView({ moduleId, command, powerStatusCommand, runCommand, command
   return <DeveloperDetails result={command.result} />;
 }
 
+function ApplicationActionResult({ command }: { command: Command }) {
+  const result = command.result ?? {};
+  const status = String(result.status ?? command.status);
+  const preset = String(result.preset ?? result.name ?? "Application");
+  const appName = preset.charAt(0).toUpperCase() + preset.slice(1);
+  const messages: Record<string, string> = {
+    focused_existing: `${appName} was brought to the foreground.`,
+    existing_found: `${appName} is already running, but Windows did not allow it to take foreground focus.`,
+    fallback_started: `${appName} was not running, so a new window was started.`,
+    started_new: `A new ${appName} window was started.`,
+    stopped: `${appName} was closed.`,
+    already_stopped: `${appName} was already closed.`,
+  };
+  return (
+    <div className="state-card">
+      <strong>{messages[status] ?? `${appName}: ${status.split("_").join(" ")}`}</strong>
+      <p>Use Refresh Applications to view the current application list.</p>
+      <DeveloperDetails result={result} />
+    </div>
+  );
+}
 function ApplicationsResult({ result, runCommand }: { result: Record<string, unknown>; runCommand: (type: string, payload?: Record<string, unknown>) => void }) {
   const items = asRecords(result.items).slice(0, 40);
   return (

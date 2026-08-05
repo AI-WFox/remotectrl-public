@@ -50,6 +50,14 @@ APP_TITLE_ALIASES = {
     "chrome": ["chrome"],
     "brave": ["brave"],
 }
+APP_PROCESS_ALIASES = {
+    "notepad": {"notepad"},
+    "calculator": {"calc", "calculator", "calculatorapp", "win32calc"},
+    "paint": {"mspaint", "paint"},
+    "explorer": {"explorer", "fileexplorer"},
+    "chrome": {"chrome"},
+    "brave": {"brave"},
+}
 
 
 class CommandHandlers:
@@ -186,6 +194,7 @@ class CommandHandlers:
                 self._normalize_process_name(Path(candidate).name)
                 for candidate in candidates
             }
+            candidate_names.update(APP_PROCESS_ALIASES.get(preset, set()))
             if process_name in candidate_names or (process_name == "applicationframehost" and any(alias in title for alias in APP_TITLE_ALIASES.get(preset, []))):
                 return preset
         return process_name
@@ -553,6 +562,7 @@ class CommandHandlers:
         preset = str(payload.get("preset") or "").strip().lower()
         if preset:
             target_names.add(self._normalize_process_name(preset))
+            target_names.update(APP_PROCESS_ALIASES.get(preset, set()))
             for candidate in APP_PRESETS.get(preset, []):
                 target_names.add(self._normalize_process_name(Path(candidate).name))
                 target_names.add(self._normalize_process_name(Path(candidate).stem))
@@ -593,14 +603,35 @@ class CommandHandlers:
 
             handle = int(hwnd)
             user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
             SW_RESTORE = 9
-            if user32.IsIconic(handle):
-                user32.ShowWindow(handle, SW_RESTORE)
-            else:
-                user32.ShowWindow(handle, SW_RESTORE)
-            user32.BringWindowToTop(handle)
-            user32.SetForegroundWindow(handle)
-            return int(user32.GetForegroundWindow()) == handle or bool(user32.IsWindowVisible(handle))
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_SHOWWINDOW = 0x0040
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+
+            foreground = int(user32.GetForegroundWindow())
+            current_thread = int(kernel32.GetCurrentThreadId())
+            target_thread = int(user32.GetWindowThreadProcessId(handle, None))
+            foreground_thread = int(user32.GetWindowThreadProcessId(foreground, None)) if foreground else 0
+            attached_threads: list[int] = []
+
+            for thread_id in {target_thread, foreground_thread}:
+                if thread_id and thread_id != current_thread and user32.AttachThreadInput(current_thread, thread_id, True):
+                    attached_threads.append(thread_id)
+            try:
+                user32.ShowWindowAsync(handle, SW_RESTORE)
+                user32.SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.SetWindowPos(handle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.BringWindowToTop(handle)
+                user32.SetActiveWindow(handle)
+                user32.SetForegroundWindow(handle)
+                user32.SetFocus(handle)
+            finally:
+                for thread_id in reversed(attached_threads):
+                    user32.AttachThreadInput(current_thread, thread_id, False)
+            return int(user32.GetForegroundWindow()) == handle
         except Exception:
             return False
 
