@@ -585,17 +585,17 @@ export function App() {
   const powerStatusCommand = selectedAgent
     ? commands.find((command) => command.agent_id === selectedAgent.id && command.type === "power.status" && command.status === "succeeded" && command.result)
     : undefined;
+  const newestModuleCommand = selectedAgent
+    ? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type))
+    : undefined;
+  const cachedModuleCommand = selectedAgent ? moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)] : undefined;
   const latestModuleCommand = selectedAgent
     ? selectedModule === "power"
       ? commands.find((command) => command.agent_id === selectedAgent.id && command.type.startsWith("power."))
         ?? powerStatusCommand
-      : moduleResultCache[moduleCacheKey(selectedAgent.id, selectedModule)]
-        ?? commands.find((command) => (
-          command.agent_id === selectedAgent.id
-          && moduleCommandTypes(selectedModule).includes(command.type)
-          && !(selectedAgent.status === "online" && command.status === "failed" && command.error === "Agent offline")
-        ))
-        ?? commands.find((command) => command.agent_id === selectedAgent.id && moduleCommandTypes(selectedModule).includes(command.type))
+      : newestModuleCommand && newestModuleCommand.status !== "succeeded"
+        ? newestModuleCommand
+        : cachedModuleCommand ?? newestModuleCommand
     : undefined;
   const commandDisabled = !selectedAgent || (!demoMode && selectedAgent.status !== "online");
 

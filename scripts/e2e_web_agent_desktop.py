@@ -343,6 +343,9 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             visible_files_text = page.locator(".module-panel").inner_text()
             if str(allowed_folder) in visible_files_text:
                 raise E2EFailure("Web Files exposed the absolute allowed-folder path in visible UI text.")
+            run_approved(page, agent_process, "Files", "Open", "files.list", "inside.txt")
+            run_approved(page, agent_process, "Files", allowed_folder.name, "files.list", "e2e.txt")
+            run_approved(page, agent_process, "Files", "Allowed folders", "files.roots", "Choose an allowed folder")
             run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")
@@ -367,6 +370,9 @@ def main() -> int:
     allowed_folder = temp_root / "allowed-files"
     allowed_folder.mkdir()
     (allowed_folder / "e2e.txt").write_text("RemoteCtrl E2E fixture", encoding="utf-8")
+    nested_folder = allowed_folder / "nested"
+    nested_folder.mkdir()
+    (nested_folder / "inside.txt").write_text("Nested RemoteCtrl E2E fixture", encoding="utf-8")
     appdata = temp_root / "appdata"
     gateway = dashboard = None
     try:
