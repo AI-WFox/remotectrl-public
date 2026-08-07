@@ -493,6 +493,63 @@ def test_webview2_webcam_forwards_frames_without_opencv():
     assert ws.messages[1]["frame"] == "ZmFrZS1mcmFtZQ=="
     assert ws.messages[-1]["ok"] is True
 
+def test_legacy_webcam_snapshot_requires_running_live_session():
+    calls = []
+
+    def camera_provider(action, payload):
+        calls.append((action, payload))
+        return {"capture_backend": "webview2", "image": "ZmFrZQ=="}
+
+    client = AgentClient(AgentConfig(), SimpleNamespace(), lambda _status: None, lambda _message: False, camera_provider)
+    ws = FakeWs()
+
+    client._handle_message(
+        ws,
+        {
+            "type": "command",
+            "command_id": "snapshot-command",
+            "agent_id": "agent-1",
+            "command_type": "webcam.snapshot",
+            "payload": {"quality": 85},
+            "requires_approval": False,
+        },
+    )
+
+    assert calls == []
+    assert ws.messages[-1]["type"] == "command_result"
+    assert ws.messages[-1]["ok"] is False
+    assert "only while Webcam Live is running" in ws.messages[-1]["error"]
+
+
+def test_legacy_webcam_snapshot_reuses_running_live_session():
+    calls = []
+
+    def camera_provider(action, payload):
+        calls.append((action, payload))
+        return {"capture_backend": "webview2", "status": "running", "image": "ZmFrZQ=="}
+
+    client = AgentClient(AgentConfig(), SimpleNamespace(), lambda _status: None, lambda _message: False, camera_provider)
+    ws = FakeWs()
+    client._start_tauri_webcam(ws, "start-command", "agent-1", {"fps": 12})
+
+    client._handle_message(
+        ws,
+        {
+            "type": "command",
+            "command_id": "snapshot-command",
+            "agent_id": "agent-1",
+            "command_type": "webcam.snapshot",
+            "payload": {"quality": 85},
+            "requires_approval": False,
+        },
+    )
+    client._stop_tauri_webcam()
+
+    assert [action for action, _payload in calls] == ["start", "snapshot", "stop"]
+    snapshot_result = [message for message in ws.messages if message.get("command_id") == "snapshot-command"][-1]
+    assert snapshot_result["ok"] is True
+    assert snapshot_result["payload"]["image"] == "ZmFrZQ=="
+
 def test_local_webcam_stop_skips_reentrant_camera_request():
     calls = []
 

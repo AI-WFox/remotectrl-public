@@ -356,6 +356,11 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
                 raise E2EFailure(f"Drive-root breadcrumb sent an invalid path: {drive_command.get('payload')}")
             run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
+            snapshot_button = page.get_by_role("button", name="Capture Snapshot", exact=True)
+            if snapshot_button.is_enabled():
+                raise E2EFailure("Webcam Snapshot must stay disabled until a live frame is available.")
+            if snapshot_button.get_attribute("title") != "Start Live to capture a snapshot.":
+                raise E2EFailure("Webcam Snapshot does not explain that Live must be started first.")
             run_approved(page, agent_process, "Power", "Refresh Power Status", "power.status", "System uptime")
 
             if extended:

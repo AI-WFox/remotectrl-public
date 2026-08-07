@@ -266,8 +266,14 @@ class AgentClient:
                 payload_result = self._stop_stream(command_type)
                 self._send(ws, result(command_id, agent_id, True, payload=payload_result))
                 return
-            if command_type in {"webcam.list", "webcam.snapshot"}:
-                payload_result = self._webcam_request("list" if command_type == "webcam.list" else "snapshot", payload)
+            if command_type == "webcam.list":
+                payload_result = self._webcam_request("list", payload)
+            elif command_type == "webcam.snapshot":
+                with self.state_lock:
+                    webcam_running = self.webcam_stream is not None
+                if not webcam_running:
+                    raise RuntimeError("Webcam snapshot is available only while Webcam Live is running.")
+                payload_result = self._webcam_request("snapshot", payload)
             elif command_type == "screen.screenshot":
                 # Still captures hide pending approval windows only; the Agent main window stays visible.
                 screenshot_payload = dict(payload)
