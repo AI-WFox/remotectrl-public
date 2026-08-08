@@ -724,7 +724,7 @@ sequenceDiagram
 | Processes | `process.list`, `process.kill` | Có | Protected process list |
 | Screen | `screen.screenshot`, `screen.live.start`, `screen.live.stop` | Có | Still capture hide approval windows only |
 | Files | `files.roots`, `files.list`, `files.download` | Có | Allowed root, traversal block, 10 MB limit |
-| Webcam | `webcam.list`, `webcam.snapshot`, `webcam.live.start`, `webcam.live.stop` | Có | Camera availability/permission errors |
+| Webcam | `webcam.list`, `webcam.live.start`, `webcam.live.stop` | Có | Camera availability/permission errors; snapshot được tạo từ live frame trên Web |
 | Activity Capture | `activity.start`, `activity.stop`, `activity.export` | Có | Visible session, runtime buffer |
 | Power | `power.status`, `power.shutdown`, `power.restart`, `power.sleep` | Có | Dry-run default, real mode local only |
 
@@ -775,7 +775,7 @@ stateDiagram-v2
 
 #### Webcam
 
-Tauri `LocalWebcam` dùng `navigator.mediaDevices.enumerateDevices()` cho diagnostics và `getUserMedia()` khi snapshot/live. Video element hidden cung cấp source, canvas encode JPEG, bridge gửi `webcam.frame` sang sidecar, sidecar forward tới Gateway. Error mapping nêu rõ permission denied, no camera, busy camera hoặc unsupported WebView. Desktop camera flow dùng WebView2 backend; OpenCV không phải capture backend chính.
+Tauri `LocalWebcam` dùng `navigator.mediaDevices.enumerateDevices()` cho diagnostics và `getUserMedia()` cho phiên Live. Video element ẩn cung cấp source, canvas encode JPEG, bridge gửi `webcam.frame` sang sidecar, rồi sidecar forward tới Gateway. Nút Capture Snapshot trên Web chỉ được bật sau khi Live đã nhận frame đầu tiên và sao chép frame webcam mới nhất; nó không gửi command riêng, không mở camera session thứ hai và không tạo approval riêng. Khi Live dừng hoặc lỗi, Web xóa frame và vô hiệu hóa Snapshot. Error mapping nêu rõ permission denied, no camera, busy camera hoặc unsupported WebView.
 
 #### Files
 

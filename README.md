@@ -12,8 +12,38 @@ FastAPI Gateway + WebSocket
 Downloadable Windows Agent App
 ```
 
-The legacy material in `Resource/` is reference-only. The implementation in this repo is new code.
+## Architecture
 
+The release path is intentionally narrow:
+
+```text
+React Web Dashboard
+        |
+HTTPS REST + WebSocket
+        |
+FastAPI Gateway + SQLite
+        |
+Authenticated outbound Agent WebSocket
+        |
+Tauri 2 Desktop + JSON Lines bridge
+        |
+Packaged Python Agent Core
+        |
+Windows APIs and WebView2
+```
+
+The Gateway owns authentication, command routing, online state and audit records. The Windows Agent opens the outbound connection and remains the local consent boundary; it does not expose an inbound HTTP service.
+
+## Features
+
+- One-time Agent enrollment and authenticated multi-Agent routing.
+- Application and process inspection/control with protected-process guardrails.
+- Screen screenshot/live viewing and WebView2 webcam live viewing.
+- Webcam snapshots copied from the latest approved live frame in the dashboard.
+- Allowed-folder browsing and browser file downloads.
+- Visible Activity Capture sessions with realtime events and export.
+- CPU, uptime, battery and guarded power actions.
+- Local approval decisions and an operator audit trail.
 ## Safety Model
 
 Remote-control capabilities can be abused when implemented as hidden tooling. RemoteCtrl intentionally avoids stealth behavior:
@@ -33,7 +63,6 @@ Remote-control capabilities can be abused when implemented as hidden tooling. Re
 - `agent/` - Python Agent Core: WebSocket, handlers, consent, streams.
 - `agent-desktop/` - Windows Tauri desktop shell, React UI, NSIS installer.
 - `docs/` - architecture, demo, and security notes.
-- `Resource/` - teacher-provided/reference material.
 
 ## One-Command Operations
 
@@ -123,3 +152,12 @@ The E2E scripts cover both a mock WebSocket agent and the real headless agent co
 3. Create or copy an enrollment token.
 4. Start agent app and enroll it with backend URL + token.
 5. Run commands with local approval: process list, applications list, file browse/download, screen/webcam live, Activity Capture, and audit review.
+## Public Deployment
+
+`Dockerfile` builds the Web dashboard and serves it from the FastAPI service. `render.yaml` defines the public Render demo service. Production deployments must provide strong values for `REMOTECTRL_SECRET_KEY`, `REMOTECTRL_ADMIN_PASSWORD`, `REMOTECTRL_ADMIN_EMAIL`, `REMOTECTRL_CORS_ORIGINS`, and `REMOTECTRL_ENV`; credentials are not stored in this repository.
+
+See `docs/RENDER_PUBLIC_DEMO.md` for deployment and enrollment instructions.
+
+## Coursework Limitations
+
+RemoteCtrl is a consent-first coursework prototype, not a production-secure remote management product. The Render free service can spin down, its SQLite file is temporary, JPEG/base64 streaming is less efficient than WebRTC or binary framing, the Windows installer is unsigned, and webcam behavior depends on Windows drivers, permissions and WebView2. The project does not provide hidden capture, remote mouse/keyboard control, production RBAC/2FA, device attestation or durable PostgreSQL persistence.

@@ -7,8 +7,8 @@
 5. Run `app.list` and show visible applications.
 6. Trigger `screen.screenshot`; approve locally on the agent.
 7. Browse allowed files and download a demo file after approval.
-8. Trigger webcam snapshot; approve locally.
-9. Start a visible key-capture demo session and export the typed demo text.
+8. Check cameras, start Webcam Live with local approval, then capture a snapshot from the latest live frame.
+9. Start a visible Activity Capture session and export the approved activity log.
 10. Trigger power command in dry-run mode and show audit log.
 
 Close by showing all actions in the audit timeline to prove consent and traceability.

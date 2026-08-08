@@ -117,7 +117,6 @@ Gateway giữ map `agent_id -> WebSocket` trong `SessionManager`. Khi tạo comm
 | NSIS | Tauri bundle | Tạo Windows installer. | Tauri target `nsis`. |
 | Pillow/ImageGrab | Agent handlers | Chụp màn hình và encode JPEG. | `handlers.py`, requirements. |
 | WebView2 camera backend | `agent-desktop/src/lib/webcam.ts` | Camera capture trong desktop, giảm phụ thuộc OpenCV trên client. | App bridge và AgentClient webcam callbacks. |
-| OpenCV | Có trong packaging/history và diagnostics; webcam hiện tại ưu tiên WebView2 | Có thể được bundle cho backend/legacy path, nhưng luồng desktop hiện tại dùng WebView2. | `docs/AGENT_DESKTOP.md`, `agent/tests/test_actions_and_streams.py`. |
 | psutil | Agent handlers/activity | Process list/kill, CPU, uptime, battery và active window process. | `agent/requirements.txt`, `handlers.py`. |
 | pynput | `activity.py` | Listener keyboard/mouse cho visible Activity Capture. | requirements và source. |
 | requests/websocket-client | Agent Core | HTTP enrollment và WebSocket client. | `agent/core/client.py`. |
@@ -158,7 +157,7 @@ Screenshot có thể yêu cầu Tauri hide approval windows trước khi capture
 
 ### Webcam
 
-Web gọi `webcam.list` để chẩn đoán. Desktop Tauri cung cấp local camera service qua WebView2; sidecar nhận frame từ bridge rồi forward thành `stream_frame`. Có các lệnh list, snapshot, live start/stop. Khi camera không có/quyền bị từ chối, Agent gửi lỗi lên Gateway để Web hiển thị.
+Web gọi `webcam.list` để chẩn đoán. Desktop Tauri cung cấp local camera service qua WebView2; sidecar nhận frame từ bridge rồi forward thành `stream_frame`. Command runtime chỉ gồm list và live start/stop. Capture Snapshot trên Web sao chép latest live frame sau khi nhận frame đầu tiên, không gửi command hoặc mở camera session riêng. Khi camera không có/quyền bị từ chối, Agent gửi lỗi lên Gateway để Web hiển thị.
 
 ### Files và allowed folders
 
@@ -279,7 +278,7 @@ Command không nhạy cảm có thể đi `queued -> sent -> running/succeeded`;
 
 ### Consent-first
 
-Các command protected được liệt kê trong `APPROVAL_REQUIRED_COMMANDS`, gồm app/process listing và control, files, screenshot/stream, webcam, activity/key capture và power. Stop stream/session cũng được đánh dấu cần approval theo repository hiện tại.
+Các command protected được liệt kê trong `APPROVAL_REQUIRED_COMMANDS`, gồm app/process listing và control, files, screenshot/stream, webcam, Activity Capture và power. Stop stream/session cũng được đánh dấu cần approval theo repository hiện tại.
 
 Agent user có thể:
 
@@ -367,7 +366,7 @@ Web public dùng same-origin API và đổi `https` thành `wss` cho dashboard W
 ### Build và installer
 
 - Web: trong `web/`, chạy `npm run build`.
-- Python sidecar: `scripts/package_agent_core.ps1` dùng PyInstaller one-file, collect NumPy/PIL, hidden imports cho pynput và loại PySide6/Tkinter.
+- Python sidecar: `scripts/package_agent_core.ps1` dùng PyInstaller one-file, collect Pillow và hidden imports cho pynput; webcam desktop dùng WebView2 thay vì OpenCV.
 - Tauri/NSIS: `scripts/package_agent_desktop.ps1` build frontend, package sidecar, chạy Tauri build với target `nsis`, copy installer vào `release/RemoteCtrlAgent-Setup.exe`.
 - Checksum: script tạo `release/RemoteCtrlAgent-Setup.exe.sha256`; có thể xác minh bằng `Get-FileHash -Algorithm SHA256 release\RemoteCtrlAgent-Setup.exe` và so với hash trong file.
 - Tauri dùng WebView2 embedded bootstrapper. Installer chưa được code-sign theo tài liệu; Windows SmartScreen có thể cảnh báo.
