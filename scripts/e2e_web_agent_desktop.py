@@ -58,16 +58,27 @@ def wait_for_http(url: str, timeout: float = 25.0) -> None:
 
 
 def terminate(process: subprocess.Popen[object] | None) -> None:
-    if not process or process.poll() is not None:
+    if not process:
+        return
+    if os.name == "nt" and process.poll() is None:
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        try:
+            process.wait(timeout=8)
+        except (subprocess.TimeoutExpired, OSError):
+            process.kill()
+        return
+    if process.poll() is not None:
         return
     try:
-        # Do not broadcast CTRL_BREAK_EVENT: GUI children can share a console
-        # with the desktop host and a broadcast may interrupt unrelated apps.
         process.terminate()
         process.wait(timeout=8)
     except (subprocess.TimeoutExpired, OSError):
         process.kill()
-
 
 def start_gateway(work_dir: Path) -> subprocess.Popen[object]:
     env = os.environ.copy()

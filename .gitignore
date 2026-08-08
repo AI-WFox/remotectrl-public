@@ -45,3 +45,8 @@ release/*.exe
 release/*.sha256
 
 *.tsbuildinfo
+# Local report/chat exports (not source artifacts)
+docs/REMOTECTRL_CHAT_LOG_FOR_REPORT.txt
+docs/REMOTECTRL_FULL_CHAT_TRANSCRIPT.md
+docs/REMOTECTRL_FULL_CHAT_TRANSCRIPT.txt
+docs/REMOTECTRL_REPORT_AUDIT.md

@@ -11,11 +11,10 @@ New-Item -ItemType Directory -Path $BinaryDir -Force | Out-Null
   --console `
   --hide-console hide-early `
   --name remotectrl-agent-core `
-  --collect-all PIL `
+  --hidden-import PIL.ImageGrab `
+  --exclude-module numpy `
   --hidden-import pynput.keyboard._win32 `
   --hidden-import pynput.mouse._win32 `
-  --exclude-module PySide6 `
-  --exclude-module tkinter `
   (Join-Path $Root "agent\remotectrl_agent\__main__.py") `
   --distpath (Join-Path $Root "agent-desktop\build\core") `
   --workpath (Join-Path $Root "agent-desktop\build\pyinstaller") `

@@ -16,3 +16,14 @@ web/dist
 agent/.venv
 agent/build
 agent/dist
+agent-desktop/node_modules
+agent-desktop/dist
+agent-desktop/build
+agent-desktop/src-tauri/target
+agent-desktop/src-tauri/binaries/*.exe
+release
+tools
+Resource
+docs/REMOTECTRL_CHAT_LOG_FOR_REPORT.txt
+docs/REMOTECTRL_FULL_CHAT_TRANSCRIPT.*
+docs/REMOTECTRL_REPORT_AUDIT.md
