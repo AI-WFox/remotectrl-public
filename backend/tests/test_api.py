@@ -33,6 +33,7 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     assert capabilities["screen.live.stop"]["requires_approval"] is True
     assert capabilities["webcam.live.stop"]["requires_approval"] is True
     assert capabilities["webcam.list"]["requires_approval"] is True
+    assert "webcam.snapshot" not in capabilities
     assert not any(command.startswith("keycapture.") for command in capabilities)
     assert capabilities["activity.start"]["requires_approval"] is True
     assert capabilities["activity.stop"]["requires_approval"] is True

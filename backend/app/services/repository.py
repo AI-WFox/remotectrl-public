@@ -26,7 +26,6 @@ APPROVAL_REQUIRED_COMMANDS = {
     "webcam.live.start",
     "webcam.live.stop",
     "webcam.list",
-    "webcam.snapshot",
     "activity.start",
     "activity.stop",
     "activity.export",

@@ -591,7 +591,6 @@ class CommandHandlers:
             "remotectrl agent",
             "remotectrl approval",
             "remotectrl activity capture",
-            "remotectrl visible key capture",
         )
         return process in {"remotectrlagent.exe", "remotectrlagent"} or window_title.startswith(agent_titles)
 

@@ -42,3 +42,17 @@ def test_ensure_admin_updates_bootstrap_password(tmp_path: Path):
     assert user is not None
     assert verify_password("second-password", user["password_hash"])
     assert not verify_password("first-password", user["password_hash"])
+
+def test_historical_command_type_remains_readable(tmp_path: Path):
+    db = tmp_path / "historical-command.db"
+    init_db(db)
+    repo = Repository(db)
+    _record, token = repo.create_enrollment_token("historical", False)
+    enrolled = repo.enroll_agent(token, "Demo", "host", "Windows", "127.0.0.1")
+    assert enrolled is not None
+    agent, _agent_token = enrolled
+
+    historical = repo.create_command(agent["id"], "webcam.snapshot", {"quality": 85}, "a@b.test")
+
+    assert repo.get_command(historical["id"])["type"] == "webcam.snapshot"
+    assert any(command["id"] == historical["id"] for command in repo.list_commands())

@@ -76,3 +76,29 @@ def test_agent_token_is_saved_protected_and_legacy_raw_token_is_migrated(monkeyp
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
     assert "agent_token" not in migrated
     assert migrated["agent_token_protected"] == "dpapi:legacy-token-protected"
+
+def test_windows_migrates_portable_agent_token_to_dpapi(monkeypatch, tmp_path: Path):
+    import types
+    import remotectrl_agent.core.config as config_module
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agent_id": "agent-1",
+                "agent_token_protected": "portable:c2VjcmV0LXRva2Vu",
+                "privacy_defaults_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "os", types.SimpleNamespace(name="nt"))
+    monkeypatch.setattr(config_module, "unprotect_agent_token", lambda _value: "secret-token")
+    monkeypatch.setattr(config_module, "protect_agent_token", lambda token: f"dpapi:{token}-protected")
+
+    loaded = config_module.load_config()
+
+    assert loaded.agent_token == "secret-token"
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["agent_token_protected"] == "dpapi:secret-token-protected"

@@ -51,7 +51,6 @@ COMMAND_CATALOG = [
     {"type": "files.list", "label": "Browse allowed files"},
     {"type": "files.download", "label": "Download file"},
     {"type": "webcam.list", "label": "List cameras"},
-    {"type": "webcam.snapshot", "label": "Capture webcam snapshot"},
     {"type": "webcam.live.start", "label": "Start webcam stream"},
     {"type": "webcam.live.stop", "label": "Stop webcam stream"},
     {"type": "power.shutdown", "label": "Shutdown endpoint"},

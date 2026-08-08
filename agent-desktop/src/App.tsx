@@ -352,13 +352,11 @@ async function handleBridgeMessage(message: BridgeMessage, bridge: AgentBridge, 
     const params = message.params ?? {}
     const response = action === "list"
       ? await webcam.list()
-      : action === "snapshot"
-        ? await webcam.snapshot(params)
-        : action === "start"
-          ? await webcam.start(params)
-          : action === "stop"
-            ? webcam.stop()
-            : { error: `Unsupported local camera action: ${action}` }
+      : action === "start"
+        ? await webcam.start(params)
+        : action === "stop"
+          ? webcam.stop()
+          : { error: `Unsupported local camera action: ${action}` }
     await bridge.reply(message.id, response)
     return
   }

@@ -84,11 +84,14 @@ def load_config() -> AgentConfig:
 
     protected_token = data.pop("agent_token_protected", None)
     legacy_raw_token = data.get("agent_token")
+    migrate_portable_token = (
+        os.name == "nt" and isinstance(protected_token, str) and protected_token.startswith("portable:")
+    )
     if protected_token:
         data["agent_token"] = unprotect_agent_token(str(protected_token))
 
     config = AgentConfig(**data)
-    if migrate_privacy_defaults or legacy_raw_token:
+    if migrate_privacy_defaults or legacy_raw_token or migrate_portable_token:
         save_config(config)
     return config
 

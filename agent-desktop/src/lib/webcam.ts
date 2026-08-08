@@ -41,22 +41,9 @@ export class LocalWebcam {
       const cameras = devices
         .filter((device) => device.kind === "videoinput")
         .map((device, index) => ({ index, device_id: device.deviceId, label: device.label || `Camera ${index + 1}` }))
-      return { items: cameras, count: cameras.length, available: cameras.length > 0, capture_backend: "webview2", opencv_available: false, cv2_available: false, agent_packaged: true }
+      return { items: cameras, count: cameras.length, available: cameras.length > 0, capture_backend: "webview2" }
     } catch (error) {
-      return { items: [], count: 0, available: false, capture_backend: "webview2", opencv_available: false, cv2_available: false, agent_packaged: true, error: cameraError(error) }
-    }
-  }
-
-  async snapshot(payload: CameraPayload) {
-    const wasStreaming = Boolean(this.stream)
-    try {
-      if (!wasStreaming) await this.open(payload)
-      const frame = await this.capture(Number(payload.quality ?? 85))
-      return { mime: "image/jpeg", image: frame, capture_backend: "webview2", available: true, count: 1 }
-    } catch (error) {
-      return { error: cameraError(error) }
-    } finally {
-      if (!wasStreaming) this.stop()
+      return { items: [], count: 0, available: false, capture_backend: "webview2", error: cameraError(error) }
     }
   }
 

@@ -954,12 +954,10 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
   if (moduleId === "screen" || moduleId === "webcam") {
     const webcamDiagnostics = moduleId === "webcam" ? latestCommand?.result : undefined;
     const isWebViewCamera = webcamDiagnostics?.capture_backend === "webview2";
-    const webcamReady = moduleId !== "webcam" || ((isWebViewCamera || Boolean(webcamDiagnostics?.opencv_available)) && Boolean(webcamDiagnostics?.available ?? true) && Number(webcamDiagnostics?.count ?? 0) > 0);
+    const webcamReady = moduleId !== "webcam" || (isWebViewCamera && Boolean(webcamDiagnostics?.available ?? true) && Number(webcamDiagnostics?.count ?? 0) > 0);
     const webcamMessage = moduleId === "webcam" && !webcamReady
       ? webcamDiagnostics?.error
-        ? isWebViewCamera
-          ? "The local Windows camera service is not available. Reopen the Agent and check cameras again."
-          : "This Agent EXE cannot load bundled OpenCV. Download and run the latest RemoteCtrlAgent.exe, then check cameras again."
+        ? "The local Windows camera service is not available. Reopen the Agent and check cameras again."
         : "Check cameras before starting webcam live."
       : "";
     return (
@@ -1325,7 +1323,7 @@ function MediaResult({ command }: { command: Command }) {
         {Boolean(result.error) && <div className="result-card danger"><span>Webcam issue</span><pre>{String(result.error)}</pre></div>}
         {cameras.map((camera) => (
           <div className="result-row" key={String(camera.index)}>
-            <div className="row-main"><strong>{String(camera.label ?? `Camera ${camera.index}`)}</strong><div className="row-meta"><span>Index {String(camera.index)}</span><span>{result.capture_backend === "webview2" ? "Windows camera service" : "OpenCV bundled"}</span></div></div>
+            <div className="row-main"><strong>{String(camera.label ?? `Camera ${camera.index}`)}</strong><div className="row-meta"><span>Index {String(camera.index)}</span><span>Windows camera service</span></div></div>
           </div>
         ))}
         <DeveloperDetails result={result} />
@@ -1476,7 +1474,7 @@ function moduleCommandTypes(moduleId: string): string[] {
     processes: ["process.list", "process.kill", "app.stop"],
     screen: ["screen.screenshot", "screen.live.start", "screen.live.stop"],
     files: ["files.roots", "files.list", "files.download"],
-    webcam: ["webcam.list", "webcam.snapshot", "webcam.live.start", "webcam.live.stop"],
+    webcam: ["webcam.list", "webcam.live.start", "webcam.live.stop"],
     activity: ["activity.start", "activity.stop", "activity.export"],
     power: ["power.status", "power.shutdown", "power.restart", "power.sleep"],
   };
@@ -1496,7 +1494,7 @@ function cacheModuleForCommand(commandType: string): string | null {
   if (commandType === "app.list") return "applications";
   if (commandType === "process.list") return "processes";
   if (commandType === "files.roots" || commandType === "files.list") return "files";
-  if (commandType === "webcam.list" || commandType === "webcam.snapshot") return "webcam";
+  if (commandType === "webcam.list") return "webcam";
   if (commandType === "screen.screenshot") return "screen";
   if (["activity.start", "activity.stop", "activity.export"].includes(commandType)) return "activity";
   if (commandType.startsWith("power.")) return "power";
@@ -1648,7 +1646,6 @@ function commandRequiresApproval(commandType: string): boolean {
     "webcam.list",
     "webcam.live.start",
     "webcam.live.stop",
-    "webcam.snapshot",
     "activity.start",
     "activity.stop",
     "activity.export",
@@ -1689,7 +1686,7 @@ function demoResult(commandType: string, payload: Record<string, unknown> = {}):
     return { path: String(payload.path ?? "D:\\Data"), allowed_root: String(payload.path ?? "D:\\Data"), entries: [{ name: "Reports", path: "D:\\Data\\Reports", is_dir: true, size: 0 }, { name: "report.docx", path: "D:\\Data\\report.docx", is_dir: false, size: 81234 }] };
   }
   if (commandType === "screen.screenshot") return { mime: "image/jpeg", image: "", width: 1920, height: 1080, status: "demo_screenshot_placeholder" };
-  if (commandType === "webcam.list") return { capture_backend: "webview2", available: true, opencv_available: false, cv2_available: false, agent_packaged: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
+  if (commandType === "webcam.list") return { capture_backend: "webview2", available: true, count: 1, items: [{ index: 0, label: "Camera 0" }] };
   if (commandType === "power.status") return { action: "status", status: "ok", dry_run_power: true, cpu_percent: 23, system_uptime_seconds: 9300, battery_percent: 84, battery_plugged: true, supported_actions: ["shutdown", "restart", "sleep"] };
   if (commandType === "activity.export") return { mode: "visible_activity_session", events: [{ time: new Date().toISOString(), type: "active_window.changed", detail: { process: "Code.exe", title: "RemoteCtrl" } }] };
   return { status: "queued", approval_required: true };
