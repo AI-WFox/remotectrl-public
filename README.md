@@ -110,14 +110,36 @@ The dashboard also has a premium demo mode on the sign-in screen, so the UI can 
 
 ### Windows Agent Desktop
 
-The distributable Agent is the Tauri desktop app with a bundled Python core. Build the NSIS installer with:
+#### Download for instructors and testers
+
+The recommended way to run the Windows Agent is the prebuilt installer from
+[GitHub Releases](https://github.com/AI-WFox/remotectrl-public/releases/latest):
+
+1. Open the latest release and expand **Assets**.
+2. Download `RemoteCtrlAgent-Setup.exe`.
+3. Optionally download `RemoteCtrlAgent-Setup.exe.sha256` and verify the installer with:
+
+```powershell
+(Get-FileHash -Algorithm SHA256 .\RemoteCtrlAgent-Setup.exe).Hash.ToLower()
+```
+
+4. Run the installer, then open **RemoteCtrl Agent** from the Desktop shortcut or Start Menu.
+5. Enter the public Gateway URL and a fresh enrollment token created in the Web dashboard.
+
+The coursework installer is currently unsigned. Windows SmartScreen may display a warning; verify the SHA-256 file before selecting **More info** and **Run anyway**. The installer already contains the Tauri desktop app and packaged Python Agent Core, so Python, Node.js and Rust are not required on the tester machine.
+
+To review source code instead, use **Code -> Download ZIP** or clone the repository and open the folder in Visual Studio Code. The source ZIP is not the runnable installer.
+
+#### Build from source
+
+The distributable Agent is a Tauri desktop app with a bundled Python core. Build the NSIS installer with:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_agent_desktop.ps1
 ```
 
-Tester artifacts are created locally in `release/`. Tagged builds are also published by
-`.github/workflows/release-agent.yml` on the repository GitHub Releases page:
+Local artifacts are created in `release/`. Tagged builds are published by
+`.github/workflows/release-agent.yml` with these Release assets:
 
 ```text
 RemoteCtrlAgent-Setup.exe
