@@ -1,32 +1,30 @@
-# React + TypeScript + Vite
+# RemoteCtrl Agent Desktop
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Windows desktop shell for the RemoteCtrl Agent.
 
-Currently, two official plugins are available:
+## Architecture
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Tauri 2 provides the native Windows shell, child windows, tray integration and sidecar lifecycle.
+- React/Vite renders the local consent, settings, privacy and activity UI.
+- The packaged Python Agent Core communicates with this desktop shell over JSON Lines on standard input/output.
+- The Agent opens an outbound WebSocket connection to the configured FastAPI Gateway; it does not expose a local HTTP server.
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+From the repository root, package the Python sidecar first, then run or build the desktop shell:
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```powershell
+.\scripts\package_agent_core.ps1
+cd agent-desktop
+npm install
+npm run build
+npm run desktop:dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Create the Windows NSIS installer with:
+
+```powershell
+.\scripts\package_agent_desktop.ps1
+```
+
+The generated installer and checksum are copied to `release/`. See `docs/AGENT_DESKTOP.md` and `docs/E2E_TESTING.md` for architecture and verification details.
