@@ -21,7 +21,7 @@ For a public demo where agents can connect from any network, deploy the Docker s
 
 Unsafe local-development defaults (never use these on Render):
 
-- Email: `admin@remotectrl.local`
+- Email: the local value of `REMOTECTRL_ADMIN_EMAIL`
 - Password: the local value of `REMOTECTRL_ADMIN_PASSWORD`
 
 ## Enroll An Agent

@@ -80,27 +80,44 @@ fn start_agent_core(app: &AppHandle) -> Result<(), String> {
   Ok(())
 }
 
+fn write_agent_core(payload: &str, state: &AgentCore) -> Result<(), String> {
+  let mut guard = state.stdin.lock().map_err(|_| "Agent core stdin lock failed")?;
+  let stdin = guard.as_mut().ok_or_else(|| "Agent core is not running".to_string())?;
+  stdin
+    .write_all(payload.as_bytes())
+    .and_then(|_| stdin.write_all(b"\n"))
+    .and_then(|_| stdin.flush())
+    .map_err(|error| error.to_string())
+}
+
+fn stop_agent_core(state: &AgentCore) {
+  if let Ok(mut stdin) = state.stdin.lock() {
+    *stdin = None;
+  }
+  if let Ok(mut child) = state.child.lock() {
+    if let Some(mut process) = child.take() {
+      let _ = process.kill();
+      let _ = process.wait();
+    }
+  }
+}
+
 #[tauri::command]
-fn agent_bridge_write(payload: String, state: State<'_, AgentCore>) -> Result<(), String> {
-  let result = (|| {
-    let mut guard = state.stdin.lock().map_err(|_| "Agent core stdin lock failed")?;
-    let stdin = guard.as_mut().ok_or_else(|| "Agent core is not running".to_string())?;
-    stdin
-      .write_all(payload.as_bytes())
-      .and_then(|_| stdin.write_all(b"\n"))
-      .and_then(|_| stdin.flush())
-      .map_err(|error| format!("Cannot send request to Agent core: {error}"))
-  })();
-  result
+fn agent_bridge_write(payload: String, app: AppHandle, state: State<'_, AgentCore>) -> Result<(), String> {
+  if write_agent_core(&payload, state.inner()).is_ok() {
+    return Ok(());
+  }
+
+  stop_agent_core(state.inner());
+  start_agent_core(&app)
+    .map_err(|error| format!("Agent core stopped unexpectedly and could not be restarted: {error}"))?;
+  write_agent_core(&payload, state.inner())
+    .map_err(|error| format!("Agent core restarted but did not accept the request: {error}"))
 }
 
 #[tauri::command]
 fn agent_core_shutdown(state: State<'_, AgentCore>) -> Result<(), String> {
-  if let Some(mut child) = state.child.lock().map_err(|_| "Agent core process lock failed")?.take() {
-    let _ = child.kill();
-    let _ = child.wait();
-  }
-  *state.stdin.lock().map_err(|_| "Agent core stdin lock failed")? = None;
+  stop_agent_core(state.inner());
   Ok(())
 }
 

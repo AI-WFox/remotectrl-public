@@ -26,7 +26,7 @@ def reset_realtime_manager():
 def dashboard_ws_url(client: TestClient) -> str:
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     ticket = client.post(
         "/api/auth/ws-ticket",
@@ -45,13 +45,13 @@ def test_agent_websocket_receives_command_and_returns_result(tmp_path):
     settings.database_path = tmp_path / "ws.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("ws", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     enrolled = client.post(
@@ -99,13 +99,13 @@ def test_delete_online_agent_closes_and_removes_record(tmp_path):
     settings.database_path = tmp_path / "delete-online.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("ws-delete", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     enrolled = client.post(
@@ -134,13 +134,13 @@ def test_command_routes_only_to_selected_agent_when_two_agents_online(tmp_path):
     settings.database_path = tmp_path / "ws-two-agents.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("ws-two", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     first = client.post(
@@ -172,7 +172,7 @@ def test_activity_events_reach_dashboard_only_as_realtime_messages(tmp_path):
     settings.database_path = tmp_path / "activity-events.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("activity", reusable=True)
 
     client = TestClient(app)
@@ -205,7 +205,7 @@ def test_agent_metadata_session_and_folder_events_reach_dashboard(tmp_path):
     settings.database_path = tmp_path / "agent-events.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("agent-events", reusable=True)
     client = TestClient(app)
     enrolled = client.post(
@@ -243,11 +243,11 @@ def test_agent_cannot_complete_another_agents_command(tmp_path):
     settings.database_path = tmp_path / "cross-agent-command.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("cross-agent", reusable=True)
     first, _first_token = repo.enroll_agent(enrollment_token, "Agent A", "host-a", "Windows", "127.0.0.1")
     second, _second_token = repo.enroll_agent(enrollment_token, "Agent B", "host-b", "Windows", "127.0.0.1")
-    command = repo.create_command(second["id"], "process.list", {}, "admin@remotectrl.local")
+    command = repo.create_command(second["id"], "process.list", {}, "qa-admin@example.invalid")
 
     asyncio.run(
         handle_agent_message(
@@ -277,7 +277,7 @@ def test_agent_cannot_report_command_error_for_another_agent(tmp_path, monkeypat
     _record, enrollment_token = repo.create_enrollment_token("cross-agent-error", reusable=True)
     first, _first_token = repo.enroll_agent(enrollment_token, "Agent A", "host-a", "Windows", "127.0.0.1")
     second, _second_token = repo.enroll_agent(enrollment_token, "Agent B", "host-b", "Windows", "127.0.0.1")
-    command = repo.create_command(second["id"], "app.start", {}, "admin@remotectrl.local")
+    command = repo.create_command(second["id"], "app.start", {}, "qa-admin@example.invalid")
     broadcasts: list[dict] = []
 
     async def record_broadcast(message: dict) -> None:
@@ -314,7 +314,7 @@ def test_agent_cannot_forward_a_stream_frame_for_another_agents_command(tmp_path
     _record, enrollment_token = repo.create_enrollment_token("cross-agent-stream", reusable=True)
     first, _first_token = repo.enroll_agent(enrollment_token, "Agent A", "host-a", "Windows", "127.0.0.1")
     second, _second_token = repo.enroll_agent(enrollment_token, "Agent B", "host-b", "Windows", "127.0.0.1")
-    command = repo.create_command(second["id"], "screen.live.start", {}, "admin@remotectrl.local")
+    command = repo.create_command(second["id"], "screen.live.start", {}, "qa-admin@example.invalid")
     broadcasts: list[dict] = []
 
     async def record_broadcast(message: dict) -> None:
@@ -349,7 +349,7 @@ def test_dashboard_websocket_requires_one_time_ticket(tmp_path):
     settings.database_path = tmp_path / "dashboard-auth.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     client = TestClient(app)
 
     with pytest.raises(WebSocketDisconnect) as unauthorized:

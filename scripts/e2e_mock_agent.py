@@ -105,6 +105,7 @@ def main() -> int:
     env = os.environ.copy()
     env["REMOTECTRL_DB"] = str(db_path)
     env["REMOTECTRL_SECRET_KEY"] = "e2e-secret"
+    env["REMOTECTRL_ADMIN_EMAIL"] = "qa-admin@example.invalid"
     env["REMOTECTRL_ADMIN_PASSWORD"] = "e2e-only-admin-password"
 
     process = subprocess.Popen(
@@ -131,7 +132,7 @@ def main() -> int:
         with httpx.Client(base_url=BASE_URL, timeout=5.0) as client:
             login = client.post(
                 "/api/auth/login",
-                json={"email": "admin@remotectrl.local", "password": "e2e-only-admin-password"},
+                json={"email": "qa-admin@example.invalid", "password": "e2e-only-admin-password"},
             )
             login.raise_for_status()
             token = login.json()["access_token"]

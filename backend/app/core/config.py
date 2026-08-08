@@ -16,7 +16,7 @@ class Settings(BaseModel):
     database_path: Path = Path(os.getenv("REMOTECTRL_DB", "remotectrl.db"))
     secret_key: str = os.getenv("REMOTECTRL_SECRET_KEY", "")
     cors_origins: list[str] = parse_cors_origins()
-    default_admin_email: str = os.getenv("REMOTECTRL_ADMIN_EMAIL", "admin@remotectrl.local")
+    default_admin_email: str = os.getenv("REMOTECTRL_ADMIN_EMAIL", "")
     default_admin_password: str = os.getenv("REMOTECTRL_ADMIN_PASSWORD", "")
     environment: str = os.getenv("REMOTECTRL_ENV", "development")
 
@@ -24,6 +24,8 @@ class Settings(BaseModel):
         unsafe = []
         if not self.secret_key:
             unsafe.append("REMOTECTRL_SECRET_KEY")
+        if not self.default_admin_email:
+            unsafe.append("REMOTECTRL_ADMIN_EMAIL")
         if not self.default_admin_password:
             unsafe.append("REMOTECTRL_ADMIN_PASSWORD")
         if self.environment.lower() == "production":

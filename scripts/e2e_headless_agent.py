@@ -57,6 +57,7 @@ def main() -> int:
     env = os.environ.copy()
     env["REMOTECTRL_DB"] = str(db_path)
     env["REMOTECTRL_SECRET_KEY"] = "headless-e2e-secret"
+    env["REMOTECTRL_ADMIN_EMAIL"] = "qa-admin@example.invalid"
     env["REMOTECTRL_ADMIN_PASSWORD"] = "e2e-only-admin-password"
 
     process = subprocess.Popen(
@@ -83,7 +84,7 @@ def main() -> int:
         wait_for_gateway()
         login = requests.post(
             f"{BASE_URL}/api/auth/login",
-            json={"email": "admin@remotectrl.local", "password": "e2e-only-admin-password"},
+            json={"email": "qa-admin@example.invalid", "password": "e2e-only-admin-password"},
             timeout=5,
         )
         login.raise_for_status()

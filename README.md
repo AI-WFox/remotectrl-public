@@ -95,7 +95,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Unsafe local-development defaults (production startup rejects these values):
 
-- Email: `admin@remotectrl.local`
+- Email: the value set in `REMOTECTRL_ADMIN_EMAIL`
 - Password: the value set in `REMOTECTRL_ADMIN_PASSWORD`
 
 ### Web

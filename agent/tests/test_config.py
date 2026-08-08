@@ -55,6 +55,19 @@ def test_current_config_preserves_allowed_folders(monkeypatch, tmp_path: Path):
 def test_new_agent_starts_without_allowed_folders():
     assert AgentConfig().allowed_folders == []
 
+
+def test_invalid_config_recovers_to_atomic_default(monkeypatch, tmp_path: Path):
+    import remotectrl_agent.core.config as config_module
+
+    config_path = tmp_path / "config.json"
+    config_path.write_bytes(b"\x00" * 128)
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_config()
+
+    assert loaded == AgentConfig()
+    assert json.loads(config_path.read_text(encoding="utf-8"))["server_url"] == AgentConfig().server_url
+    assert not config_path.with_suffix(".json.tmp").exists()
 def test_agent_token_is_saved_protected_and_legacy_raw_token_is_migrated(monkeypatch, tmp_path: Path):
     import remotectrl_agent.core.config as config_module
 

@@ -10,13 +10,13 @@ def test_api_login_enroll_and_offline_command(tmp_path):
     settings.database_path = tmp_path / "api.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("test", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     assert login.status_code == 200
     token = login.json()["access_token"]
@@ -105,13 +105,13 @@ def test_cleanup_offline_agents_and_reenroll_reuses_identity(tmp_path):
     settings.database_path = tmp_path / "cleanup.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("test", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
@@ -157,13 +157,13 @@ def test_delete_single_agent_removes_record_and_commands(tmp_path):
     settings.database_path = tmp_path / "delete-agent.db"
     init_db(settings.database_path)
     repo = Repository(settings.database_path)
-    repo.ensure_admin("admin@remotectrl.local", "admin12345")
+    repo.ensure_admin("qa-admin@example.invalid", "admin12345")
     _record, enrollment_token = repo.create_enrollment_token("test", reusable=True)
 
     client = TestClient(app)
     login = client.post(
         "/api/auth/login",
-        json={"email": "admin@remotectrl.local", "password": "admin12345"},
+        json={"email": "qa-admin@example.invalid", "password": "admin12345"},
     )
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 

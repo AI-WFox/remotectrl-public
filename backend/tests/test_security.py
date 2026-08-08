@@ -18,17 +18,28 @@ def test_token_roundtrip():
 
 
 def test_production_rejects_known_default_credentials():
-    settings = Settings(environment="production", secret_key="dev-change-me", default_admin_password="admin12345")
+    settings = Settings(environment="production", secret_key="dev-change-me", default_admin_email="qa-admin@example.invalid", default_admin_password="admin12345")
     with pytest.raises(RuntimeError, match="REMOTECTRL_SECRET_KEY.*REMOTECTRL_ADMIN_PASSWORD"):
         settings.validate_runtime()
 
 
 def test_runtime_rejects_missing_secret_key():
-    settings = Settings(environment="development", secret_key="", default_admin_password="test-only-strong-password")
+    settings = Settings(environment="development", secret_key="", default_admin_email="qa-admin@example.invalid", default_admin_password="test-only-strong-password")
     with pytest.raises(RuntimeError, match="REMOTECTRL_SECRET_KEY"):
         settings.validate_runtime()
 
 
+def test_runtime_rejects_missing_admin_email():
+    settings = Settings(
+        environment="development",
+        secret_key="test-only-strong-secret",
+        default_admin_email="",
+        default_admin_password="test-only-strong-password",
+    )
+    with pytest.raises(RuntimeError, match="REMOTECTRL_ADMIN_EMAIL"):
+        settings.validate_runtime()
+
+
 def test_production_accepts_explicit_secure_configuration():
-    settings = Settings(environment="production", secret_key="test-only-strong-secret-with-32-chars", default_admin_password="test-only-strong-password")
+    settings = Settings(environment="production", secret_key="test-only-strong-secret-with-32-chars", default_admin_email="qa-admin@example.invalid", default_admin_password="test-only-strong-password")
     settings.validate_runtime()

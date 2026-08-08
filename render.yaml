@@ -11,7 +11,7 @@ services:
       - key: REMOTECTRL_ENV
         value: production
       - key: REMOTECTRL_ADMIN_EMAIL
-        value: admin@remotectrl.local
+        sync: false
       - key: REMOTECTRL_ADMIN_PASSWORD
         sync: false
       - key: REMOTECTRL_CORS_ORIGINS

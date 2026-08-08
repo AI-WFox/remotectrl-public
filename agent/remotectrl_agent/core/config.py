@@ -4,14 +4,17 @@ import base64
 import ctypes
 import json
 import os
+import threading
 from ctypes import wintypes
 from dataclasses import asdict, dataclass, field
+from os import fsync, replace
 from pathlib import Path
 
 
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "RemoteCtrlAgent"
 CONFIG_PATH = APP_DIR / "config.json"
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
+_CONFIG_LOCK = threading.RLock()
 
 
 class _DataBlob(ctypes.Structure):
@@ -75,7 +78,14 @@ class AgentConfig:
 def load_config() -> AgentConfig:
     if not CONFIG_PATH.exists():
         return AgentConfig()
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    try:
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            raise ValueError("Agent config must be a JSON object")
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        config = AgentConfig()
+        save_config(config)
+        return config
 
     migrate_privacy_defaults = "privacy_defaults_version" not in data
     if migrate_privacy_defaults:
@@ -97,9 +107,15 @@ def load_config() -> AgentConfig:
 
 
 def save_config(config: AgentConfig) -> None:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    data = asdict(config)
-    token = data.pop("agent_token", None)
-    if token:
-        data["agent_token_protected"] = protect_agent_token(token)
-    CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with _CONFIG_LOCK:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        data = asdict(config)
+        token = data.pop("agent_token", None)
+        if token:
+            data["agent_token_protected"] = protect_agent_token(token)
+        temporary_path = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
+        with temporary_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            fsync(handle.fileno())
+        replace(temporary_path, CONFIG_PATH)

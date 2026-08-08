@@ -1,6 +1,7 @@
 """Smoke test the compiled Tauri desktop shell without using the user profile."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -20,11 +21,18 @@ def main() -> int:
         print(f"Missing Tauri executable: {EXE}", file=sys.stderr)
         return 2
     env = os.environ.copy()
-    env["APPDATA"] = tempfile.mkdtemp(prefix="remotectrl-tauri-smoke-")
+    appdata = Path(tempfile.mkdtemp(prefix="remotectrl-tauri-smoke-"))
+    config_path = appdata / "RemoteCtrlAgent" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_bytes(b"\x00" * 128)
+    env["APPDATA"] = str(appdata)
     process = subprocess.Popen([str(EXE)], cwd=str(EXE.parent), env=env)
     try:
         window = Desktop(backend="uia").window(title="RemoteCtrl Agent")
         window.wait("visible", timeout=25)
+        recovered_config = json.loads(config_path.read_text(encoding="utf-8"))
+        if recovered_config.get("server_url") != "https://remotectrl-public-demo.onrender.com":
+            raise RuntimeError("Agent core did not recover the corrupt local config")
         for label in ["Overview", "Access & Privacy", "Activity", "Settings"]:
             window.child_window(title=label, control_type="Button").wait("exists", timeout=8)
         window.child_window(title="Access & Privacy", control_type="Button").click()
@@ -33,6 +41,12 @@ def main() -> int:
         power_toggle.click_input()
         window.child_window(title="Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.", control_type="Text").wait("visible", timeout=8)
         confirm_text = window.child_window(title="Confirm that this device may perform real shutdown, restart, and sleep actions. Every request will still need local approval.", control_type="Text")
+        core_processes = [child for child in psutil.Process(process.pid).children(recursive=True) if "remotectrl-agent-core" in child.name().lower()]
+        if not core_processes:
+            raise RuntimeError("Packaged Agent core process was not running")
+        for core_process in core_processes:
+            core_process.kill()
+        psutil.wait_procs(core_processes, timeout=5)
         window.child_window(title="Enable real mode", control_type="Button").invoke()
         confirm_text.wait_not("visible", timeout=8)
         deadline = time.monotonic() + 8

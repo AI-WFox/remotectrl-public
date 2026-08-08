@@ -36,7 +36,7 @@ Set these in Render:
 ```text
 REMOTECTRL_ENV=production
 REMOTECTRL_SECRET_KEY=<generated strong secret>
-REMOTECTRL_ADMIN_EMAIL=admin@remotectrl.local
+REMOTECTRL_ADMIN_EMAIL=<admin email>
 REMOTECTRL_ADMIN_PASSWORD=<strong password>
 REMOTECTRL_CORS_ORIGINS=https://<your-render-service>.onrender.com
 ```

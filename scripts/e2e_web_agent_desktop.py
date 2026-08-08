@@ -86,6 +86,7 @@ def start_gateway(work_dir: Path) -> subprocess.Popen[object]:
         {
             "REMOTECTRL_DB": str(work_dir / "gateway.db"),
             "REMOTECTRL_SECRET_KEY": "desktop-e2e-secret",
+            "REMOTECTRL_ADMIN_EMAIL": "qa-admin@example.invalid",
             "REMOTECTRL_ADMIN_PASSWORD": "e2e-only-admin-password",
             "REMOTECTRL_CORS_ORIGINS": WEB_URL,
         }
@@ -384,7 +385,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
         try:
             log("opening dashboard in Chrome")
             page.goto(WEB_URL, wait_until="networkidle")
-            page.get_by_label("Email").fill("admin@remotectrl.local")
+            page.get_by_label("Email").fill("qa-admin@example.invalid")
             page.get_by_label("Password").fill("e2e-only-admin-password")
             page.get_by_role("button", name="Sign in", exact=True).click()
             page.get_by_role("button", name="Create enrollment token", exact=True).wait_for(timeout=12_000)
