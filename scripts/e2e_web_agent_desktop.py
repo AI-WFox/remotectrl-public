@@ -316,6 +316,12 @@ def run_screen_live_capture(page: Page, agent_process: subprocess.Popen[object],
     if after != before:
         raise E2EFailure("Capture Still created a legacy screen.screenshot command instead of copying the live frame.")
 
+    page.get_by_role("button", name="Refresh audit trail", exact=True).click()
+    page.wait_for_timeout(1_200)
+    if not page.locator('[aria-label="Captured screen screenshot"]').is_visible():
+        raise E2EFailure("A command-history refresh incorrectly cleared the current Screen snapshot.")
+    if not capture.is_enabled():
+        raise E2EFailure("A command-history refresh incorrectly disabled Capture Still while Screen Live was running.")
     page.get_by_role("button", name="Stop Live", exact=True).click()
     approve_next(agent_process, "screen.live.stop")
     wait_for_approval_closed(agent_process, "screen.live.stop")

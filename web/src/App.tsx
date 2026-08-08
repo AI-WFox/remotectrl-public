@@ -120,6 +120,7 @@ export function App() {
   const exportedActivityCommandIds = useRef<Set<string>>(new Set());
   const commandRequestsInFlight = useRef<Set<string>>(new Set());
   const recentCommandRequests = useRef<Map<string, number>>(new Map());
+  const commandStatuses = useRef<Map<string, string>>(new Map());
   const downloadEffectsReady = useRef(false);
   const activityActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
 
@@ -146,16 +147,20 @@ export function App() {
 
   useEffect(() => {
     setModuleResultCache((current) => updateModuleResultCache(current, commands));
+    const previousStatuses = commandStatuses.current;
+    const nextStatuses = new Map(commands.map((command) => [command.id, command.status]));
     if (!downloadEffectsReady.current) {
       for (const command of commands) {
         if (command.type === "files.download") downloadedCommandIds.current.add(command.id);
         if (command.type === "activity.export") exportedActivityCommandIds.current.add(command.id);
       }
+      commandStatuses.current = nextStatuses;
       downloadEffectsReady.current = true;
       return;
     }
     for (const command of commands) {
-      if (command.status === "succeeded" && ["screen.live.stop", "webcam.live.stop"].includes(command.type)) {
+      const previousStatus = previousStatuses.get(command.id);
+      if (command.status === "succeeded" && previousStatus !== undefined && previousStatus !== "succeeded" && ["screen.live.stop", "webcam.live.stop"].includes(command.type)) {
         const stream = command.type.startsWith("screen.") ? "screen" : "webcam";
         clearStreamRuntime(command.agent_id, stream);
       }
@@ -173,6 +178,7 @@ export function App() {
         setNotice(downloaded.error);
       }
     }
+    commandStatuses.current = nextStatuses;
   }, [commands]);
 
   useEffect(() => {
