@@ -23,6 +23,8 @@ WebcamCallback = Callable[[str, dict[str, Any]], dict[str, Any]]
 SessionCallback = Callable[[], None]
 CommandErrorCallback = Callable[[str, str], None]
 
+SCREEN_CAPTURE_SETTLE_SECONDS = 0.7
+
 
 class AgentClient:
     def __init__(
@@ -49,6 +51,7 @@ class AgentClient:
         self.send_lock = threading.Lock()
         self.state_lock = threading.RLock()
         self.active_streams: dict[str, tuple[threading.Event, threading.Thread]] = {}
+        self.latest_stream_frames: dict[str, dict[str, Any]] = {}
         self.session_approvals: set[str] = set()
         self.activity_active = False
         self.command_slots = threading.BoundedSemaphore(8)
@@ -269,10 +272,13 @@ class AgentClient:
             if command_type == "webcam.list":
                 payload_result = self._webcam_request("list", payload)
             elif command_type == "screen.screenshot":
-                # Still captures hide pending approval windows only; the Agent main window stays visible.
-                screenshot_payload = dict(payload)
-                screenshot_payload["_hide_approval_windows"] = True
-                payload_result = self.handlers.handle(command_type, screenshot_payload)
+                # Compatibility path only: never perform a second desktop capture.
+                with self.state_lock:
+                    screen_running = "screen" in self.active_streams
+                    cached_frame = self.latest_stream_frames.get("screen")
+                if not screen_running or not cached_frame:
+                    raise RuntimeError("Screen Live must be running before capturing a screenshot.")
+                payload_result = {**cached_frame, "status": "captured_from_live", "compatibility_path": True}
             else:
                 payload_result = self.handlers.handle(command_type, payload)
             if command_type == "activity.start" and payload_result.get("status") in {"started", "already_running"}:
@@ -380,18 +386,20 @@ class AgentClient:
     def webcam_active(self) -> bool:
         return self.webcam_stream is not None
 
-    def _start_stream(self, ws, command_id: str, agent_id: str, command_type: str, payload: dict) -> None:
+    def _start_stream(self, ws, command_id: str, agent_id: str, command_type: str, payload: dict, settle_seconds: float | None = None) -> None:
         stream = self._stream_name(command_type)
         if stream == "webcam":
             self._start_tauri_webcam(ws, command_id, agent_id, payload)
             return
         stop_stream = threading.Event()
+        settle_seconds = SCREEN_CAPTURE_SETTLE_SECONDS if settle_seconds is None else max(0.0, settle_seconds)
         thread = threading.Thread(
             target=self._stream_frames,
-            args=(ws, command_id, agent_id, stream, command_type, payload, stop_stream),
+            args=(ws, command_id, agent_id, stream, command_type, payload, stop_stream, settle_seconds),
             daemon=True,
         )
         with self.state_lock:
+            self.latest_stream_frames.pop(stream, None)
             self.active_streams[stream] = (stop_stream, thread)
         self._notify_session_change()
         thread.start()
@@ -410,6 +418,7 @@ class AgentClient:
             thread.join(timeout=2)
         with self.state_lock:
             self.active_streams.pop(stream, None)
+            self.latest_stream_frames.pop(stream, None)
         self._notify_session_change()
         return {"stream": stream, "status": "stop_requested"}
 
@@ -433,6 +442,7 @@ class AgentClient:
                 thread.join(timeout=2)
             with self.state_lock:
                 self.active_streams.pop(stream, None)
+                self.latest_stream_frames.pop(stream, None)
         self._notify_session_change()
 
     def _webcam_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -488,61 +498,125 @@ class AgentClient:
         self._send(stream["ws"], {"type": "stream_status", "command_id": stream["command_id"], "agent_id": stream["agent_id"], "stream": "webcam", "status": "stopped", "fps": stream["fps"]})
         self._send(stream["ws"], result(stream["command_id"], stream["agent_id"], True, payload={"stream": "webcam", "frames": stream["frames"], "duration_seconds": round(time.time() - stream["started"], 2), "fps": stream["fps"], "capture_backend": "webview2"}))
         return {"stream": "webcam", "status": "stopped"}
-    def _stream_frames(self, ws, command_id: str, agent_id: str, stream: str, command_type: str, payload: dict, stop_stream: threading.Event) -> None:
+    def _stream_frames(
+        self,
+        ws,
+        command_id: str,
+        agent_id: str,
+        stream: str,
+        command_type: str,
+        payload: dict,
+        stop_stream: threading.Event,
+        settle_seconds: float,
+    ) -> None:
         fps = min(max(float(payload.get("fps", 10)), 1.0), 15.0)
         frame_count = 0
-        started = time.time()
         stream_payload = dict(payload)
-        # Live screen sharing leaves the main Agent window visible by design.
+        # Live screen sharing leaves the main Agent and visible session indicator open.
         stream_payload["_hide_approval_windows"] = False
-        self._send(ws, {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "running", "fps": fps})
+        started = time.time()
         try:
+            # Tauri replies only after hiding the approval child window. The
+            # settle interval lets the Windows compositor remove it completely.
+            cancelled_during_settle = bool(settle_seconds and stop_stream.wait(settle_seconds))
+            if cancelled_during_settle or stop_stream.is_set() or self.stop_event.is_set():
+                self._safe_send(
+                    ws,
+                    {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "stopped", "fps": fps},
+                )
+                self._safe_send(
+                    ws,
+                    result(command_id, agent_id, True, payload={"stream": stream, "frames": 0, "duration_seconds": 0.0, "fps": fps}),
+                )
+                return
+            started = time.time()
+            if not self._safe_send(
+                ws,
+                {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "running", "fps": fps},
+            ):
+                return
             while not stop_stream.is_set() and not self.stop_event.is_set():
                 frame_started = time.time()
                 frame = self.handlers.handle("screen.screenshot", stream_payload)
                 image = frame.get("image")
                 if image:
-                    self._send(
+                    sent_at = time.time()
+                    cached_frame = {
+                        "mime": frame.get("mime", "image/jpeg"),
+                        "image": image,
+                        "width": frame.get("width"),
+                        "height": frame.get("height"),
+                        "captured_at": sent_at,
+                    }
+                    with self.state_lock:
+                        self.latest_stream_frames[stream] = cached_frame
+                    if not self._safe_send(
                         ws,
                         {
                             "type": "stream_frame",
                             "command_id": command_id,
                             "agent_id": agent_id,
                             "stream": stream,
-                            "mime": frame.get("mime", "image/jpeg"),
+                            "mime": cached_frame["mime"],
                             "frame": image,
+                            "width": cached_frame["width"],
+                            "height": cached_frame["height"],
                             "frame_index": frame_count + 1,
-                            "sent_at": time.time(),
+                            "sent_at": sent_at,
                         },
-                    )
+                    ):
+                        return
                     frame_count += 1
                 elapsed = time.time() - frame_started
                 stop_stream.wait(max(0.0, (1 / fps) - elapsed))
-            self._send(
+            self._safe_send(
                 ws,
                 {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "stopped", "fps": fps},
             )
-            self._send(
+            self._safe_send(
                 ws,
                 result(
                     command_id,
                     agent_id,
                     True,
                     payload={"stream": stream, "frames": frame_count, "duration_seconds": round(time.time() - started, 2), "fps": fps},
-                )
+                ),
             )
         except Exception as exc:
+            if self._is_socket_closed_error(exc) or stop_stream.is_set() or self.stop_event.is_set():
+                return
             error = str(exc)
             self._report_command_error(command_type, error)
-            self._send(
-                ws,
-                {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "failed", "fps": fps, "error": error},
-            )
-            self._send(ws, result(command_id, agent_id, False, error=error))
+            try:
+                self._safe_send(
+                    ws,
+                    {"type": "stream_status", "command_id": command_id, "agent_id": agent_id, "stream": stream, "status": "failed", "fps": fps, "error": error},
+                )
+                self._safe_send(ws, result(command_id, agent_id, False, error=error))
+            except Exception:
+                pass
         finally:
             with self.state_lock:
                 self.active_streams.pop(stream, None)
+                self.latest_stream_frames.pop(stream, None)
             self._notify_session_change()
+
+    @staticmethod
+    def _is_socket_closed_error(exc: Exception) -> bool:
+        closed_error = getattr(websocket, "WebSocketConnectionClosedException", None)
+        if closed_error and isinstance(exc, closed_error):
+            return True
+        message = str(exc).lower()
+        return "socket is closed" in message or "socket is already closed" in message or "connection is already closed" in message
+
+    def _safe_send(self, ws, message: dict) -> bool:
+        try:
+            self._send(ws, message)
+            return True
+        except Exception as exc:
+            if self._is_socket_closed_error(exc):
+                return False
+            raise
 
     def _notify_handler_provider(self, action: str) -> None:
         provider = getattr(self.handlers, "desktop_provider", None)

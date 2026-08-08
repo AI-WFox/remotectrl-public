@@ -490,9 +490,19 @@ function ApprovalWindow({ requestId }: { requestId: string }) {
   const decide = async (approved: boolean, scope: "single_command" | "current_session") => {
     if (!payload || resolved.current) return
     resolved.current = true
-    await emit("approval-response", { id: payload.id, approved, approval_mode: "prompt_once", policy_scope: scope })
+    const approvalWindow = getCurrentWebviewWindow()
+    await approvalWindow.hide()
+    await new Promise<void>((resolve) => setTimeout(resolve, 75))
+    const approvalUiClosedAt = Date.now() / 1000
     await emit("approval-finished", { label: requestId })
-    await getCurrentWebviewWindow().hide()
+    await emit("approval-response", {
+      id: payload.id,
+      approved,
+      approval_mode: "prompt_once",
+      policy_scope: scope,
+      approval_ui_closed: true,
+      approval_ui_closed_at: approvalUiClosedAt,
+    })
   }
   return <TooltipProvider><div className="min-h-screen bg-background p-5"><Card className="border-amber-500/30 shadow-none"><CardContent className="space-y-5 p-5"><div className="flex items-start gap-3"><div className="grid size-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600"><ShieldCheck className="size-5" /></div><div><p className="text-xs font-semibold tracking-wide text-amber-700 dark:text-amber-300">LOCAL CONSENT REQUIRED</p><h1 className="mt-1 text-xl font-semibold">Allow remote action?</h1></div></div><div className="rounded-lg border border-border bg-muted/35 p-3"><p className="font-mono text-sm font-semibold">{message?.command_type ?? "Remote action"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{Object.entries(message?.payload ?? {}).map(([key, value]) => `${key}: ${String(value)}`).join(" · ") || "No additional parameters"}</p></div><p className="text-sm text-muted-foreground">Your decision is sent to the gateway and recorded in the audit trail.</p><div className="flex flex-wrap justify-end gap-2"><Button variant="destructive" onClick={() => decide(false, "single_command")}><XCircle />Deny</Button><Button variant="outline" onClick={() => decide(true, "single_command")}>Allow once</Button><Button onClick={() => decide(true, "current_session")}>Allow for this session</Button></div></CardContent></Card></div></TooltipProvider>
 }

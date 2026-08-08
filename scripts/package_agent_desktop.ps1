@@ -16,6 +16,15 @@ if ($LASTEXITCODE -ne 0) { throw "Agent core packaging failed with exit code $LA
 Push-Location (Join-Path $Root "agent-desktop")
 try { & $Npm run tauri build } finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS packaging failed with exit code $LASTEXITCODE" }
+$DesktopExecutable = Join-Path $Root "agent-desktop\src-tauri\target\release\remotectrl-agent-desktop.exe"
+if (!(Test-Path $DesktopExecutable)) { throw "Tauri completed but the desktop executable was not found." }
+$DesktopBytes = [System.IO.File]::ReadAllBytes($DesktopExecutable)
+$PeOffset = [BitConverter]::ToInt32($DesktopBytes, 0x3C)
+$OptionalHeaderOffset = $PeOffset + 24
+$WindowsSubsystem = [BitConverter]::ToUInt16($DesktopBytes, $OptionalHeaderOffset + 68)
+if ($WindowsSubsystem -ne 2) {
+    throw "RemoteCtrl Agent desktop must use the Windows GUI subsystem. Found subsystem $WindowsSubsystem."
+}
 
 $InstallerSource = Get-ChildItem -Path (Join-Path $Root "agent-desktop\src-tauri\target\release\bundle\nsis") -Filter "*-setup.exe" |
     Sort-Object LastWriteTime -Descending |

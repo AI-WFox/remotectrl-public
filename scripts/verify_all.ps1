@@ -54,6 +54,13 @@ foreach ($Executable in @($DesktopExe, $Installer)) {
         throw "Invalid Windows executable header: $Executable"
     }
 }
+$DesktopBytes = [System.IO.File]::ReadAllBytes($DesktopExe)
+$PeOffset = [BitConverter]::ToInt32($DesktopBytes, 0x3C)
+$OptionalHeaderOffset = $PeOffset + 24
+$WindowsSubsystem = [BitConverter]::ToUInt16($DesktopBytes, $OptionalHeaderOffset + 68)
+if ($WindowsSubsystem -ne 2) {
+    throw "RemoteCtrl Agent desktop uses PE subsystem $WindowsSubsystem instead of the Windows GUI subsystem."
+}
 $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLower()
 $StoredHash = ([System.IO.File]::ReadAllText($Checksum)).Split(' ')[0].Trim().ToLower()
 if ($Hash -ne $StoredHash) { throw "Installer checksum does not match $Checksum" }

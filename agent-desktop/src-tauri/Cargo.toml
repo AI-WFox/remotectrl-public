@@ -1,6 +1,6 @@
 [package]
 name = "remotectrl-agent-desktop"
-version = "0.2.1"
+version = "0.2.2"
 description = "RemoteCtrl consent-first Windows Agent"
 authors = ["RemoteCtrl Team"]
 license = "UNLICENSED"

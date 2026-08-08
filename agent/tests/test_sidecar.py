@@ -14,7 +14,19 @@ class FakeBridge:
         self.events.append((name, data or {}))
 
     def request_ui(self, _method: str, _params: dict | None = None, timeout: float = 90.0):
-        return {"approved": True, "approval_mode": "prompt_once", "policy_scope": "single_command"}
+        return {"approved": True, "approval_mode": "prompt_once", "policy_scope": "single_command", "approval_ui_closed": True, "approval_ui_closed_at": 12.5}
+
+
+
+
+def test_sidecar_preserves_approval_window_closed_ack():
+    app = AgentSidecar(FakeBridge(), AgentConfig())
+
+    decision = app._approval({"command_type": "screen.live.start", "payload": {}})
+
+    assert decision["approved"] is True
+    assert decision["approval_ui_closed"] is True
+    assert decision["approval_ui_closed_at"] == 12.5
 
 
 def test_sidecar_state_never_exposes_agent_token():

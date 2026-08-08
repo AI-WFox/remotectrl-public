@@ -124,7 +124,7 @@ def test_stream_start_and_stop_sends_status_and_result():
     ws = FakeWs()
     client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: True)
 
-    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10, "quality": 65})
+    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10, "quality": 65}, settle_seconds=0)
     time.sleep(0.15)
     result = client._stop_stream("screen.live.stop")
     time.sleep(0.05)
@@ -144,7 +144,7 @@ def test_duplicate_stream_start_returns_already_running_without_approval():
     approval_calls = []
     ws = FakeWs()
     client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: approval_calls.append(command) or True)
-    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10})
+    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10}, settle_seconds=0)
     time.sleep(0.05)
 
     client._handle_message(
@@ -208,7 +208,7 @@ def test_stop_stream_requires_approval_when_backend_marks_sensitive():
     approval_calls = []
     ws = FakeWs()
     client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: approval_calls.append(command) or True)
-    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10})
+    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10}, settle_seconds=0)
     time.sleep(0.05)
     client._handle_message(
         ws,
@@ -545,19 +545,18 @@ def test_local_webcam_stop_skips_reentrant_camera_request():
     assert ws.messages[-2]["status"] == "stopped"
     assert ws.messages[-1]["ok"] is True
 
-def test_capture_still_hides_only_pending_approval_windows():
+def test_legacy_screen_screenshot_rejects_without_live_session():
     class FakeHandlers:
         def __init__(self):
             self.payloads = []
 
         def handle(self, command_type, payload):
             self.payloads.append((command_type, payload))
-            return {"mime": "image/jpeg", "image": "ZmFrZQ=="}
+            raise AssertionError("legacy screenshot must not capture independently")
 
     handlers = FakeHandlers()
     ws = FakeWs()
     client = AgentClient(AgentConfig(), handlers, lambda status: None, lambda command: True)
-    client.active_streams["screen"] = (object(), object())
 
     client._handle_message(
         ws,
@@ -571,9 +570,102 @@ def test_capture_still_hides_only_pending_approval_windows():
         },
     )
 
-    assert handlers.payloads == [("screen.screenshot", {"quality": 85, "_hide_approval_windows": True})]
+    assert handlers.payloads == []
     assert ws.messages[-1]["type"] == "command_result"
-    assert ws.messages[-1]["ok"] is True
+    assert ws.messages[-1]["ok"] is False
+    assert ws.messages[-1]["error"] == "Screen Live must be running before capturing a screenshot."
+
+
+def test_legacy_screen_screenshot_copies_cached_live_frame():
+    class FakeHandlers:
+        def handle(self, _command_type, _payload):
+            raise AssertionError("legacy screenshot must use the cached Screen Live frame")
+
+    ws = FakeWs()
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: True)
+    client.active_streams["screen"] = (object(), object())
+    client.latest_stream_frames["screen"] = {
+        "mime": "image/jpeg",
+        "image": "bGl2ZS1mcmFtZQ==",
+        "width": 1280,
+        "height": 720,
+        "captured_at": 12.5,
+    }
+
+    client._handle_message(
+        ws,
+        {
+            "type": "command",
+            "command_id": "still-2",
+            "agent_id": "agent-1",
+            "command_type": "screen.screenshot",
+            "payload": {"quality": 85},
+            "requires_approval": False,
+        },
+    )
+
+    payload = ws.messages[-1]["payload"]
+    assert payload["status"] == "captured_from_live"
+    assert payload["compatibility_path"] is True
+    assert payload["image"] == "bGl2ZS1mcmFtZQ=="
+    assert payload["width"] == 1280
+    assert payload["height"] == 720
+
+
+def test_screen_worker_waits_for_settle_before_running_and_first_capture():
+    captures = []
+
+    class FakeHandlers:
+        def handle(self, command_type, payload):
+            captures.append(time.monotonic())
+            return {"mime": "image/jpeg", "image": "ZmFrZQ==", "width": 640, "height": 360}
+
+    ws = FakeWs()
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: True)
+    started_at = time.monotonic()
+
+    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10}, settle_seconds=0.06)
+    time.sleep(0.02)
+
+    assert captures == []
+    assert not any(message.get("status") == "running" for message in ws.messages)
+
+    deadline = time.monotonic() + 0.5
+    while not captures and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    client._stop_stream("screen.live.stop")
+    assert captures
+    assert captures[0] - started_at >= 0.05
+    assert any(message.get("status") == "running" for message in ws.messages)
+    frame = next(message for message in ws.messages if message.get("type") == "stream_frame")
+    assert frame["width"] == 640
+    assert frame["height"] == 360
+
+
+def test_closed_screen_socket_does_not_report_capture_error():
+    class ClosingWs(FakeWs):
+        def send(self, raw: str) -> None:
+            message = json.loads(raw)
+            if any(item.get("type") == "stream_status" and item.get("status") == "running" for item in self.messages):
+                raise RuntimeError("socket is closed")
+            self.messages.append(message)
+
+    class FakeHandlers:
+        def handle(self, _command_type, _payload):
+            return {"mime": "image/jpeg", "image": "ZmFrZQ=="}
+
+    errors = []
+    ws = ClosingWs()
+    client = AgentClient(AgentConfig(), FakeHandlers(), lambda status: None, lambda command: True, on_command_error=lambda command, error: errors.append((command, error)))
+    client._start_stream(ws, "cmd-start", "agent-1", "screen.live.start", {"fps": 10}, settle_seconds=0)
+
+    deadline = time.monotonic() + 0.5
+    while "screen" in client.active_streams and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert errors == []
+    assert "screen" not in client.active_streams
 
 def test_session_approval_is_scoped_to_application_resource():
     class FakeHandlers:

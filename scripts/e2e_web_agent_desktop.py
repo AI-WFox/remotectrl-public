@@ -203,7 +203,7 @@ def wait_for_terminal_command(access_token: str, command_type: str, timeout: flo
     raise E2EFailure(f"Command did not reach a terminal state: {command_type}; last={last}")
 
 
-def approve_next(process: subprocess.Popen[object], expected_command: str) -> None:
+def approve_next(process: subprocess.Popen[object], expected_command: str) -> float:
     deadline = time.monotonic() + 20
     desktop = Desktop(backend="uia")
     while time.monotonic() < deadline:
@@ -224,7 +224,7 @@ def approve_next(process: subprocess.Popen[object], expected_command: str) -> No
                     button.click_input()
                 except Exception:
                     button.iface_invoke.Invoke()
-                return
+                return time.monotonic()
             except Exception:
                 continue
         time.sleep(0.2)
@@ -258,6 +258,78 @@ def run_approved(page: Page, agent_process: subprocess.Popen[object], module: st
     return terminal
 
 
+def command_count(access_token: str, command_type: str) -> int:
+    response = requests.get(
+        f"{BASE_URL}/api/commands",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    return sum(1 for item in response.json() if item.get("type") == command_type)
+
+
+def wait_for_approval_closed(process: subprocess.Popen[object], expected_command: str, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    desktop = Desktop(backend="uia")
+    while time.monotonic() < deadline:
+        matching_visible = False
+        for approval in desktop.windows():
+            try:
+                if approval.window_text() != "RemoteCtrl Approval" or approval.process_id() != process.pid or not approval.is_visible():
+                    continue
+                labels = [item.window_text() for item in approval.descendants() if item.window_text()]
+                matching_visible = matching_visible or expected_command in labels
+            except Exception:
+                continue
+        if not matching_visible:
+            return
+        time.sleep(0.05)
+    raise E2EFailure(f"Approval window remained visible after deciding {expected_command}.")
+
+
+def run_screen_live_capture(page: Page, agent_process: subprocess.Popen[object], access_token: str) -> None:
+    page.get_by_role("button", name="Screen", exact=True).click()
+    capture = page.get_by_role("button", name="Capture Still", exact=True)
+    if capture.is_enabled():
+        raise E2EFailure("Screen Capture Still must be disabled before Screen Live starts.")
+    if capture.get_attribute("title") != "Start Screen Live to capture a screenshot.":
+        raise E2EFailure("Screen Capture Still does not explain that Screen Live must start first.")
+
+    page.get_by_role("button", name="Start Live", exact=True).click()
+    approved_at = approve_next(agent_process, "screen.live.start")
+    wait_for_approval_closed(agent_process, "screen.live.start")
+
+    deadline = time.monotonic() + 20
+    while not capture.is_enabled() and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    if not capture.is_enabled():
+        raise E2EFailure("Screen Capture Still did not enable after the first Screen Live frame.")
+    if time.monotonic() - approved_at < 0.5:
+        raise E2EFailure("The first Screen Live frame arrived before the approval close settle interval.")
+    if not agent_window(agent_process).is_visible():
+        raise E2EFailure("The main Agent window was hidden during Screen Live.")
+
+    before = command_count(access_token, "screen.screenshot")
+    capture.click()
+    page.locator('[aria-label="Captured screen screenshot"]').wait_for(timeout=5_000)
+    after = command_count(access_token, "screen.screenshot")
+    if after != before:
+        raise E2EFailure("Capture Still created a legacy screen.screenshot command instead of copying the live frame.")
+
+    page.get_by_role("button", name="Stop Live", exact=True).click()
+    approve_next(agent_process, "screen.live.stop")
+    wait_for_approval_closed(agent_process, "screen.live.stop")
+    terminal = wait_for_terminal_command(access_token, "screen.live.stop")
+    if terminal.get("status") != "succeeded":
+        raise E2EFailure(f"Screen Live stop failed: {terminal}")
+    deadline = time.monotonic() + 8
+    while capture.is_enabled() and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    if capture.is_enabled():
+        raise E2EFailure("Screen Capture Still stayed enabled after Stop Live.")
+    if page.locator('[aria-label="Captured screen screenshot"]').count():
+        raise E2EFailure("Stop Live did not clear the captured Screen snapshot.")
+
 def wait_for_activity_indicator(process: subprocess.Popen[object], visible: bool, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     desktop = Desktop(backend="uia")
@@ -281,7 +353,7 @@ def wait_for_activity_indicator(process: subprocess.Popen[object], visible: bool
 def run_extended(page: Page, agent_process: subprocess.Popen[object]) -> None:
     log("checking Web command routing and approval dialogs")
     run_approved(page, agent_process, "Applications", "Notepad", "app.start", "app.start")
-    run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
+    # Screen live/capture is covered by the primary browser flow.
     run_approved(page, agent_process, "Activity Capture", "Start Activity Session", "activity.start", "activity.start")
     wait_for_activity_indicator(agent_process, True)
     run_approved(page, agent_process, "Activity Capture", "Stop Session", "activity.stop", "activity.stop")
@@ -365,7 +437,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
             drive_command = run_approved(page, agent_process, "Files", "C:", "files.list", "Windows")
             if drive_command.get("payload", {}).get("path") != "C:\\":
                 raise E2EFailure(f"Drive-root breadcrumb sent an invalid path: {drive_command.get('payload')}")
-            run_approved(page, agent_process, "Screen", "Capture Still", "screen.screenshot", "Screenshot")
+            run_screen_live_capture(page, agent_process, dashboard_token)
             run_approved(page, agent_process, "Webcam", "Check Cameras", "webcam.list", "Camera diagnostics", result_timeout_ms=60_000)
             snapshot_button = page.get_by_role("button", name="Capture Snapshot", exact=True)
             if snapshot_button.is_enabled():
@@ -385,7 +457,7 @@ def run_browser_flow(appdata: Path, allowed_folder: Path, extended: bool) -> Non
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--extended", action="store_true", help="Also start Notepad, an additional screenshot and Activity Capture.")
+    parser.add_argument("--extended", action="store_true", help="Also start Notepad and Activity Capture after the primary Screen Live coverage.")
     args = parser.parse_args()
     if not BACKEND_PYTHON.exists() or not NPM.exists():
         raise E2EFailure("Missing backend environment or bundled Node runtime.")

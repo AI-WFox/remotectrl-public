@@ -30,7 +30,7 @@ import type { Agent, AuditEvent, Command } from "./lib/types";
 const modules = [
   { id: "applications", label: "Applications", icon: AppWindow, command: "app.list", safe: false },
   { id: "processes", label: "Processes", icon: Activity, command: "process.list", safe: false },
-  { id: "screen", label: "Screen", icon: Monitor, command: "screen.screenshot", safe: false },
+  { id: "screen", label: "Screen", icon: Monitor, command: "screen.live.start", safe: false },
   { id: "files", label: "Files", icon: FileDown, command: "files.roots", safe: false },
   { id: "webcam", label: "Webcam", icon: Camera, command: "webcam.list", safe: false },
   { id: "activity", label: "Activity Capture", icon: KeyRound, command: "activity.start", safe: false },
@@ -60,11 +60,11 @@ const protectedProcessNames = new Set([
 
 type Theme = "light" | "dark";
 type StreamKind = "screen" | "webcam";
-type StreamFrame = { mime: string; frame: string } | null;
-type WebcamSnapshot = { mime: string; frame: string; capturedAt: string } | null;
+type StreamFrame = { mime: string; frame: string; width?: number; height?: number } | null;
+type StreamSnapshot = { mime: string; frame: string; width?: number; height?: number; capturedAt: string; agentId: string; agentName: string } | null;
 type StreamStats = { status: string; fps: number; frames: number; latencyMs: number };
 type StreamFrameMap = Record<string, StreamFrame>;
-type WebcamSnapshotMap = Record<string, WebcamSnapshot>;
+type StreamSnapshotMap = Record<string, StreamSnapshot>;
 type StreamStatsMap = Record<string, StreamStats>;
 type ActivityEvent = { time: string; type: string; detail: Record<string, unknown> };
 type ActivityEventMap = Record<string, ActivityEvent[]>;
@@ -108,7 +108,7 @@ export function App() {
   const [moduleResultCache, setModuleResultCache] = useState<Record<string, Command>>({});
   const [appStartMode, setAppStartMode] = useState<AppStartMode>("focus_existing");
   const [streamFrames, setStreamFrames] = useState<StreamFrameMap>({});
-  const [webcamSnapshots, setWebcamSnapshots] = useState<WebcamSnapshotMap>({});
+  const [streamSnapshots, setStreamSnapshots] = useState<StreamSnapshotMap>({});
   const [streamStats, setStreamStats] = useState<StreamStatsMap>({});
   const [activityEvents, setActivityEvents] = useState<ActivityEventMap>({});
   const [agentSessionStates, setAgentSessionStates] = useState<AgentSessionStateMap>({});
@@ -122,6 +122,13 @@ export function App() {
   const recentCommandRequests = useRef<Map<string, number>>(new Map());
   const downloadEffectsReady = useRef(false);
   const activityActive = Boolean(selectedAgent && agentSessionStates[selectedAgent.id]?.activity);
+
+  function clearStreamRuntime(agentId: string, stream: StreamKind) {
+    const key = streamStateKey(agentId, stream);
+    setStreamFrames((frames) => ({ ...frames, [key]: null }));
+    setStreamStats((stats) => ({ ...stats, [key]: { ...emptyStreamStats, status: "idle" } }));
+    if (stream === "screen") setStreamSnapshots((snapshots) => ({ ...snapshots, [key]: null }));
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -150,9 +157,7 @@ export function App() {
     for (const command of commands) {
       if (command.status === "succeeded" && ["screen.live.stop", "webcam.live.stop"].includes(command.type)) {
         const stream = command.type.startsWith("screen.") ? "screen" : "webcam";
-        const key = streamStateKey(command.agent_id, stream);
-        setStreamFrames((frames) => ({ ...frames, [key]: null }));
-        setStreamStats((stats) => ({ ...stats, [key]: { ...emptyStreamStats, status: "idle" } }));
+        clearStreamRuntime(command.agent_id, stream);
       }
       if (command.type === "activity.export" && command.status === "succeeded" && command.result && !exportedActivityCommandIds.current.has(command.id)) {
         exportedActivityCommandIds.current.add(command.id);
@@ -194,7 +199,11 @@ export function App() {
         if (message.type === "agent.session_snapshot" && message.sessions && typeof message.sessions === "object") {
           const snapshot = message.sessions as Record<string, Record<string, unknown>>;
           const next: AgentSessionStateMap = {};
-          for (const [agentId, sessions] of Object.entries(snapshot)) next[agentId] = { screen: Boolean(sessions.screen), webcam: Boolean(sessions.webcam), activity: Boolean(sessions.activity) };
+          for (const [agentId, sessions] of Object.entries(snapshot)) {
+            next[agentId] = { screen: Boolean(sessions.screen), webcam: Boolean(sessions.webcam), activity: Boolean(sessions.activity) };
+            if (!sessions.screen) clearStreamRuntime(agentId, "screen");
+            if (!sessions.webcam) clearStreamRuntime(agentId, "webcam");
+          }
           setAgentSessionStates(next);
           return;
         }
@@ -206,6 +215,8 @@ export function App() {
             ...current,
             [agentId]: { screen: Boolean(source.screen), webcam: Boolean(source.webcam), activity: Boolean(source.activity) },
           }));
+          if (!source.screen) clearStreamRuntime(agentId, "screen");
+          if (!source.webcam) clearStreamRuntime(agentId, "webcam");
           return;
         }
         if (message.type === "agent.metadata" && message.agent && typeof message.agent === "object") {
@@ -256,7 +267,15 @@ export function App() {
           const stream = streamKind(message.stream);
           if (!stream) return;
           const key = streamStateKey(String(message.agent_id ?? ""), stream);
-          setStreamFrames((frames) => ({ ...frames, [key]: { mime: message.mime ?? "image/jpeg", frame: message.frame } }));
+          setStreamFrames((frames) => ({
+            ...frames,
+            [key]: {
+              mime: message.mime ?? "image/jpeg",
+              frame: message.frame,
+              width: typeof message.width === "number" ? message.width : undefined,
+              height: typeof message.height === "number" ? message.height : undefined,
+            },
+          }));
           setStreamStats((stats) => {
             const current = stats[key] ?? emptyStreamStats;
             return {
@@ -277,7 +296,11 @@ export function App() {
           const key = streamStateKey(String(message.agent_id ?? ""), stream);
           const nextStatus = message.status ?? "idle";
           if (["stopped", "failed"].includes(nextStatus)) {
-            setStreamFrames((frames) => ({ ...frames, [key]: null }));
+            clearStreamRuntime(String(message.agent_id ?? ""), stream);
+            if (nextStatus === "failed" && String(message.agent_id ?? "") === selectedAgentIdRef.current) {
+              setNotice(String(message.error ?? (stream + " live stream failed.")));
+            }
+            return;
           }
           setStreamStats((stats) => {
             const current = stats[key] ?? emptyStreamStats;
@@ -295,6 +318,15 @@ export function App() {
           });
           return;
         }
+        if (message.type === "agent.offline") {
+          const agentId = String(message.agent_id ?? "");
+          if (agentId) {
+            clearStreamRuntime(agentId, "screen");
+            clearStreamRuntime(agentId, "webcam");
+          }
+          refresh(token);
+          return;
+        }
       } catch {
         // Ignore malformed realtime events and fall back to polling refresh.
       }
@@ -310,7 +342,10 @@ export function App() {
           const delays = [1000, 2000, 5000, 10000];
           const delay = delays[Math.min(retryAttempt, delays.length - 1)];
           retryAttempt += 1;
-          setNotice("Realtime disconnected. Reconnecting...");
+          setStreamFrames({});
+          setStreamStats({});
+          setStreamSnapshots({});
+          setNotice("Gateway connection lost. Reconnecting...");
           retryTimer = setTimeout(() => void connectRealtime(), delay);
         };
         ws.onerror = () => ws.close();
@@ -378,7 +413,7 @@ export function App() {
     setDemoMode(false);
     setEnrollmentToken("");
     setStreamFrames({});
-    setWebcamSnapshots({});
+    setStreamSnapshots({});
     setStreamStats({});
     setActivityEvents({});
     setAgentSessionStates({});
@@ -444,6 +479,7 @@ export function App() {
     if (startedStream && startedStreamKey) {
       setStreamFrames((frames) => ({ ...frames, [startedStreamKey]: null }));
       setStreamStats((stats) => ({ ...stats, [startedStreamKey]: { ...emptyStreamStats, status: "starting", fps: Number(payload.fps ?? 10) } }));
+      if (startedStream === "screen") setStreamSnapshots((snapshots) => ({ ...snapshots, [startedStreamKey]: null }));
     }
     if (demoMode) {
       const command: Command = {
@@ -498,28 +534,37 @@ export function App() {
     }
   }
 
-  function captureWebcamSnapshot() {
+  function captureLiveSnapshot(stream: StreamKind) {
     if (!selectedAgent) {
       setNotice("Select an Agent before capturing a snapshot.");
       return;
     }
-    const key = streamStateKey(selectedAgent.id, "webcam");
+    const key = streamStateKey(selectedAgent.id, stream);
     const stats = streamStats[key] ?? emptyStreamStats;
     const frame = streamFrames[key];
     if (stats.status !== "running") {
-      setNotice("Start Live to capture a snapshot.");
+      setNotice(stream === "screen" ? "Start Screen Live to capture a screenshot." : "Start Live to capture a snapshot.");
       return;
     }
     if (!frame) {
-      setNotice("Waiting for the first camera frame.");
+      setNotice(stream === "screen" ? "Waiting for the first clean screen frame." : "Waiting for the first camera frame.");
       return;
     }
-    setWebcamSnapshots((current) => ({
+    setStreamSnapshots((current) => ({
       ...current,
-      [key]: { mime: frame.mime, frame: frame.frame, capturedAt: new Date().toISOString() },
+      [key]: {
+        mime: frame.mime,
+        frame: frame.frame,
+        width: frame.width,
+        height: frame.height,
+        capturedAt: new Date().toISOString(),
+        agentId: selectedAgent.id,
+        agentName: selectedAgent.name,
+      },
     }));
-    setNotice(`Captured a webcam snapshot from ${selectedAgent.name}.`);
+    setNotice("Captured a " + (stream === "screen" ? "screen screenshot" : "webcam snapshot") + " from " + selectedAgent.name + ".");
   }
+
   async function makeEnrollmentToken() {
     if (!token) return;
     if (demoMode) {
@@ -741,7 +786,7 @@ export function App() {
               refresh={refresh}
               streamFrames={streamFrames}
               streamStats={streamStats}
-              webcamSnapshots={webcamSnapshots}
+              streamSnapshots={streamSnapshots}
               activityEvents={selectedAgent ? activityEvents[selectedAgent.id] ?? [] : []}
               latestCommand={latestModuleCommand}
               powerStatusCommand={powerStatusCommand}
@@ -749,7 +794,7 @@ export function App() {
               appStartMode={appStartMode}
               setAppStartMode={setAppStartMode}
               commandDisabled={commandDisabled}
-              captureWebcamSnapshot={captureWebcamSnapshot}
+              captureLiveSnapshot={captureLiveSnapshot}
             />
         </section>
 
@@ -836,7 +881,7 @@ function ModuleSurface({
   refresh,
   streamFrames,
   streamStats,
-  webcamSnapshots,
+  streamSnapshots,
   activityEvents,
   latestCommand,
   powerStatusCommand,
@@ -844,7 +889,7 @@ function ModuleSurface({
   appStartMode,
   setAppStartMode,
   commandDisabled,
-  captureWebcamSnapshot,
+  captureLiveSnapshot,
 }: {
   module: (typeof modules)[number];
   selectedAgent?: Agent;
@@ -852,7 +897,7 @@ function ModuleSurface({
   refresh: () => void;
   streamFrames: StreamFrameMap;
   streamStats: StreamStatsMap;
-  webcamSnapshots: WebcamSnapshotMap;
+  streamSnapshots: StreamSnapshotMap;
   activityEvents: ActivityEvent[];
   latestCommand?: Command;
   powerStatusCommand?: Command;
@@ -860,7 +905,7 @@ function ModuleSurface({
   appStartMode: AppStartMode;
   setAppStartMode: (mode: AppStartMode) => void;
   commandDisabled: boolean;
-  captureWebcamSnapshot: () => void;
+  captureLiveSnapshot: (stream: StreamKind) => void;
 }) {
   const Icon = module.icon;
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -871,7 +916,12 @@ function ModuleSurface({
   const activeStreamKey = selectedAgent && activeStream ? streamStateKey(selectedAgent.id, activeStream) : null;
   const activeStats = activeStreamKey ? streamStats[activeStreamKey] ?? emptyStreamStats : emptyStreamStats;
   const activeFrame = activeStreamKey ? streamFrames[activeStreamKey] ?? null : null;
-  const activeWebcamSnapshot = module.id === "webcam" && activeStreamKey ? webcamSnapshots[activeStreamKey] ?? null : null;
+  const activeSnapshot = activeStreamKey ? streamSnapshots[activeStreamKey] ?? null : null;
+  const streamActionPending = Boolean(
+    latestCommand
+    && ["screen.live.start", "screen.live.stop", "webcam.live.start", "webcam.live.stop"].includes(latestCommand.type)
+    && ["queued", "sent", "pending_approval"].includes(latestCommand.status),
+  );
   const liveRunning = activeStats.status === "running";
   const liveStarting = activeStats.status === "starting";
   const liveActive = liveRunning || liveStarting;
@@ -899,7 +949,7 @@ function ModuleSurface({
       <div className={`module-preview ${isDataModule ? "data-layout" : ""}`}>
         <div className="module-actions">
           <div className="action-row">
-            {renderControls(module.id, runCommand, liveRunning, liveActive, Boolean(activeFrame), activityActive, appStartMode, setAppStartMode, commandDisabled, latestCommand, captureWebcamSnapshot)}
+            {renderControls(module.id, runCommand, liveRunning, liveActive, Boolean(activeFrame), streamActionPending, activityActive, appStartMode, setAppStartMode, commandDisabled, latestCommand, captureLiveSnapshot)}
             <button className="secondary" onClick={() => refresh()}>Refresh audit trail</button>
           </div>
           {isLiveModule && (
@@ -933,13 +983,13 @@ function ModuleSurface({
               </div>
             </div>
           )}
-          {module.id === "webcam" && activeWebcamSnapshot && (
-            <section className="captured-snapshot" aria-label="Captured webcam snapshot">
+          {isLiveModule && activeSnapshot && (
+            <section className="captured-snapshot" aria-label={module.id === "screen" ? "Captured screen screenshot" : "Captured webcam snapshot"}>
               <div>
-                <strong>Captured snapshot</strong>
-                <span>{formatTime(activeWebcamSnapshot.capturedAt)}</span>
+                <strong>{module.id === "screen" ? "Captured screenshot" : "Captured snapshot"}</strong>
+                <span>{activeSnapshot.agentName} · {formatTime(activeSnapshot.capturedAt)}{activeSnapshot.width && activeSnapshot.height ? " · " + activeSnapshot.width + " x " + activeSnapshot.height : ""}</span>
               </div>
-              <img src={`data:${activeWebcamSnapshot.mime};base64,${activeWebcamSnapshot.frame}`} alt="Captured webcam snapshot" />
+              <img src={"data:" + activeSnapshot.mime + ";base64," + activeSnapshot.frame} alt={module.id === "screen" ? "Captured screen screenshot" : "Captured webcam snapshot"} />
             </section>
           )}
           {module.id === "activity" && <LiveActivityFeed events={activityEvents} />}
@@ -950,7 +1000,7 @@ function ModuleSurface({
   );
 }
 
-function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, hasLiveFrame: boolean, activityActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean, latestCommand: Command | undefined, captureWebcamSnapshot: () => void) {
+function renderControls(moduleId: string, runCommand: (type: string, payload?: Record<string, unknown>) => void, liveRunning: boolean, liveActive: boolean, hasLiveFrame: boolean, streamActionPending: boolean, activityActive: boolean, appStartMode: AppStartMode, setAppStartMode: (mode: AppStartMode) => void, commandDisabled: boolean, latestCommand: Command | undefined, captureLiveSnapshot: (stream: StreamKind) => void) {
   if (moduleId === "screen" || moduleId === "webcam") {
     const webcamDiagnostics = moduleId === "webcam" ? latestCommand?.result : undefined;
     const isWebViewCamera = webcamDiagnostics?.capture_backend === "webview2";
@@ -974,8 +1024,10 @@ function renderControls(moduleId: string, runCommand: (type: string, payload?: R
         <button className="secondary" onClick={() => runCommand(`${moduleId}.live.stop`)} disabled={commandDisabled || !liveRunning}>
           <Square size={16} /> Stop Live
         </button>
-        {moduleId === "screen" && <button className="secondary" onClick={() => runCommand("screen.screenshot", { quality: 85 })} disabled={commandDisabled} title="Save a full-resolution still without stopping the live stream">Capture Still</button>}
-        {moduleId === "webcam" && <button className="secondary" onClick={captureWebcamSnapshot} disabled={commandDisabled || !liveRunning || !hasLiveFrame} title={!liveRunning ? "Start Live to capture a snapshot." : !hasLiveFrame ? "Waiting for the first camera frame." : "Capture the latest live webcam frame."}>Capture Snapshot</button>}
+        {moduleId === "screen" && <button className="secondary" onClick={() => captureLiveSnapshot("screen")} disabled={commandDisabled || streamActionPending || !liveRunning || !hasLiveFrame} title={!liveRunning ? "Start Screen Live to capture a screenshot." : !hasLiveFrame ? "Waiting for the first clean screen frame." : streamActionPending ? "Wait for the current Screen action to finish." : "Capture the latest clean Screen Live frame."}>Capture Still</button>}
+        {moduleId === "webcam" && <button className="secondary" onClick={() => captureLiveSnapshot("webcam")} disabled={commandDisabled || !liveRunning || !hasLiveFrame} title={!liveRunning ? "Start Live to capture a snapshot." : !hasLiveFrame ? "Waiting for the first camera frame." : "Capture the latest live webcam frame."}>Capture Snapshot</button>}
+        {moduleId === "screen" && !liveRunning && <div className="inline-hint">Start Screen Live to capture a screenshot.</div>}
+        {moduleId === "screen" && liveRunning && !hasLiveFrame && <div className="inline-hint">Waiting for the first clean screen frame.</div>}
         {moduleId === "webcam" && !liveRunning && <div className="inline-hint">Start Live to capture a snapshot.</div>}
         {moduleId === "webcam" && liveRunning && !hasLiveFrame && <div className="inline-hint">Waiting for the first camera frame.</div>}
         {webcamMessage && <div className="inline-hint danger-text">{webcamMessage}</div>}

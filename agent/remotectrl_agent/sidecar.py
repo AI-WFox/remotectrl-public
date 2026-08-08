@@ -134,6 +134,8 @@ class AgentSidecar:
             "approved": bool(response.get("approved")),
             "approval_mode": str(response.get("approval_mode") or "prompt_once"),
             "policy_scope": str(response.get("policy_scope") or "single_command"),
+            "approval_ui_closed": bool(response.get("approval_ui_closed", False)),
+            "approval_ui_closed_at": response.get("approval_ui_closed_at"),
         }
 
     def _webcam_request(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:

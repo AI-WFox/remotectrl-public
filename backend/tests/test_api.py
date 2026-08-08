@@ -230,6 +230,7 @@ def test_command_submission_deduplicates_active_requests_and_rate_limits_bursts(
     assert len(repo.list_agent_commands(agent_id)) == 1
 
     main_module._command_attempts.clear()
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: 100.0)
     responses = [
         client.post(
             "/api/commands",
