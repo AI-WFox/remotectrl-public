@@ -12,6 +12,8 @@ FastAPI Gateway + WebSocket
 Downloadable Windows Agent App
 ```
 
+![Web dashboard in demo mode: agents, modules, consent stats and command timeline](docs/images/dashboard.png)
+
 ## Architecture
 
 The release path is intentionally narrow:
@@ -150,7 +152,7 @@ For desktop development, see `docs/AGENT_DESKTOP.md`.
 
 ## Verification
 
-Commands run successfully in this workspace:
+Checks run during development:
 
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest
@@ -162,8 +164,6 @@ tools\node-v24.16.0-win-x64\npm.cmd install
 tools\node-v24.16.0-win-x64\npm.cmd run build
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\package_agent_desktop.ps1
 ```
-
-This Codex environment did not have global `npm`, so a portable official Node.js LTS (`v24.16.0`) was used from `tools/` for verification. `tools/` is ignored and can be recreated.
 
 The E2E scripts cover both a mock WebSocket agent and the real headless agent core. The headless agent check uses `AgentClient` and `CommandHandlers` to return a real `process.list` result from the current machine. The UI smoke test opens the Windows agent app and verifies the `RemoteCtrl Agent` window appears.
 
